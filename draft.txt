@@ -1,0 +1,21 @@
+for now the main idea is to make the end-to-end request flow work.
+no breaker
+no routing 
+
+> we gonna start with: 
+
+1. app/config.py and app/models/domain
+
+2. app/core/adapters/base.py  (the contract: ProviderAdapter interface)
+
+3. the core logic
+
+4. services/gateway_service.py
+
+5. api/v1/chat.py + schemas + main.py
+
+
+> database model: 
+- api_keys
+- usage_records 
+- princing 
