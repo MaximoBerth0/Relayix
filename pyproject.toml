@@ -1,0 +1,17 @@
+[project]
+name = "relayix"
+version = "0.1.0"
+description = "LLM gateway with multiple providers"
+authors = [
+    {name = "MaximoBerth0",email = "maximo1.berth@gmail.com"}
+]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
