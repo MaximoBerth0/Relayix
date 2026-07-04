@@ -42,7 +42,7 @@ relayix/
 │   │   │   ├── base.py              # ProviderAdapter interface
 │   │   │   ├── openai_adapter.py
 │   │   │   ├── anthropic_adapter.py
-│   │   │   └── registry.py          # provider registry/factory
+│   │   │   └── registry.py             # provider registry/factory
 │   │   │
 │   │   ├── routing/
 │   │   │   ├── router.py            # RoutingService
