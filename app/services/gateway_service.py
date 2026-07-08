@@ -2,8 +2,9 @@ from app.core.adapters.registry import AdapterRegistry
 from app.models.domain.chat import ChatRequest, ChatResponse
 from app.models.domain.enums import ProviderEnum
 
-class GatewayService: 
-    def __init__(self, registry: AdapterRegistry): ...
+class GatewayService:
+    def __init__(self, registry: AdapterRegistry) -> None:
+        self._registry = registry
 
     async def complete(self, request: ChatRequest) -> ChatResponse:
         provider = self._resolve_provider(request.model)

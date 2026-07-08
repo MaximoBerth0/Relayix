@@ -4,7 +4,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.core.adapters.registry import AdapterRegistry, build_registry
+from app.api.v1 import chat
+from app.core.adapters.registry import build_registry
 from app.infra.global_exceptions import AppError
 
 
@@ -15,12 +16,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-def get_registry(request: Request) -> AdapterRegistry:
-    """FastAPI dependency: resolve the process-wide adapter registry."""
-    return request.app.state.registry
-
-
 app = FastAPI(title="Relayix", lifespan=lifespan)
+
+app.include_router(chat.router)
 
 
 @app.exception_handler(AppError)
