@@ -28,3 +28,15 @@ class AppError(Exception):
             "error_code": self.error_code,
             "message": self.message,
         }
+
+
+class ProviderNotAvailable(AppError):
+    """Raised when no adapter is configured for the resolved provider
+    """
+
+    def __init__(self, message: str = "Provider not available"):
+        super().__init__(
+            message=message,
+            status_code=503,
+            error_code="PROVIDER_NOT_AVAILABLE",
+        )

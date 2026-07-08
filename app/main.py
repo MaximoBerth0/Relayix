@@ -7,16 +7,22 @@ from fastapi.responses import JSONResponse
 from app.api.v1 import chat
 from app.core.adapters.registry import build_registry
 from app.infra.global_exceptions import AppError
+from app.observability.logging import setup_logging
+from app.observability.request_id import RequestIdMiddleware
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Build shared, long-lived resources once per process"""
+    setup_logging()  # configure logging before anything emits
     app.state.registry = build_registry()
     yield
 
 
 app = FastAPI(title="Relayix", lifespan=lifespan)
+
+# tag every request with a correlation id (X-Request-ID) for the logs
+app.add_middleware(RequestIdMiddleware)
 
 app.include_router(chat.router)
 
