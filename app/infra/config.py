@@ -13,7 +13,6 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        env_prefix="RELAYIX_",
         extra="ignore",
     )
 
@@ -21,8 +20,21 @@ class Settings(BaseSettings):
     environment: str = "development"  # development | production
     debug: bool = False
 
-    # the durable ledger (api_keys, usage_records, pricing) 
-    database_url: str = "sqlite+aiosqlite:///./relayix.db" # future postgres database
+    # the durable ledger (api_keys, usage_records, pricing)
+    database_url: str 
+
+    # async engine / connection-pool tuning (consumed by database/session.py)
+    db_echo: bool = False             # log every emitted SQL statement
+    db_pool_size: int = 5             # persistent connections kept open
+    db_max_overflow: int = 10         # extra connections allowed past pool_size under load
+    db_pool_timeout_s: float = 30.0   # how long to wait for a free connection before erroring
+    db_pool_recycle_s: int = 1800     # recycle connections older than this (avoids stale sockets)
+    db_pool_pre_ping: bool = True     # test a connection with a ping before handing it out
+
+    # per-connection timeouts (asyncpg / PostgreSQL specific)
+    db_connect_timeout_s: float = 10.0    # give up establishing a new connection after this
+    db_command_timeout_s: float = 30.0    # asyncpg client-side query timeout
+    db_statement_timeout_ms: int = 30000  # server-side PostgreSQL statement_timeout (milliseconds)
 
     # provider credentials
     openai_api_key: str | None = None
