@@ -3,12 +3,7 @@ import tiktoken
 from app.core.accounting.token_counter import TokenCounter
 from app.models.domain.chat import ChatRequest
 
-# fallback encoding when a model name isn't known to tiktoken yet (e.g. a
-# freshly released model). o200k_base backs the current GPT-4o family.
 _FALLBACK_ENCODING = "o200k_base"
-
-# per the OpenAI chat-format overhead: every message is wrapped with a few
-# structural tokens, and every response is primed with the assistant role.
 _TOKENS_PER_MESSAGE = 3
 _TOKENS_PER_REPLY = 3
 
