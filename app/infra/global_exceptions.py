@@ -40,3 +40,14 @@ class ProviderNotAvailable(AppError):
             status_code=503,
             error_code="PROVIDER_NOT_AVAILABLE",
         )
+
+
+class Unauthorized(AppError):
+    """Raised when a request carries no valid, active API key."""
+
+    def __init__(self, message: str = "Invalid or missing API key"):
+        super().__init__(
+            message=message,
+            status_code=401,
+            error_code="UNAUTHORIZED",
+        )

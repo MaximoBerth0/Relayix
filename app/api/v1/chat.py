@@ -1,7 +1,9 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, status
 
 from app.services.gateway_service import GatewayService
-from app.api.deps import get_gateway_service
+from app.api.deps import get_current_api_key_id, get_gateway_service
 from app.api.v1.schemas.chat import ChatRequestSchema, ChatResponseSchema
 
 router = APIRouter(
@@ -18,7 +20,8 @@ router = APIRouter(
 async def create_completion(
     payload: ChatRequestSchema,
     service: GatewayService = Depends(get_gateway_service),
+    api_key_id: UUID = Depends(get_current_api_key_id),
 ) -> ChatResponseSchema:
     request = payload.to_domain()
-    result = await service.complete(request)
+    result = await service.complete(request, api_key_id)
     return ChatResponseSchema.from_domain(result)
