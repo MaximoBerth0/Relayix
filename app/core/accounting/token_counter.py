@@ -8,12 +8,7 @@ if TYPE_CHECKING:
 
 
 class TokenCounter(ABC):
-    """Contract every provider's tokenizer (OpenAI, Anthropic) must implement.
-
-    Used to estimate the token count of a request *before* it is dispatched,
-    so cost accounting and rate limiting can act on it up front. The rest of
-    the system only ever talks to this interface, never to a concrete
-    tokenizer
+    """contract every provider's tokenizer (OpenAI, Anthropic) must implement.
     """
 
     @abstractmethod
