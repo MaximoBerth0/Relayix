@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.accounting.pricing import PricingTable
 from app.core.accounting.usage_recorder import UsageRecorder
 from app.core.adapters.registry import AdapterRegistry
+from app.core.routing.router import RoutingService
 from app.infra.database.session import get_session
 from app.infra.global_exceptions import Unauthorized
 from app.infra.security.crypto import hash_api_key
@@ -18,17 +19,22 @@ from app.repositories.usage_repo import UsageRepo
 from app.services.gateway_service import GatewayService
 
 
-def get_registry(request: Request) -> AdapterRegistry:
+async def get_registry(request: Request) -> AdapterRegistry:
     """resolve the process-wide adapter registry built during startup"""
     return request.app.state.registry
 
 
-def get_pricing_table(request: Request) -> PricingTable:
+async def get_pricing_table(request: Request) -> PricingTable:
     """resolve the process-wide pricing table built during startup"""
     return request.app.state.pricing
 
 
-def get_usage_recorder(
+async def get_router(request: Request) -> RoutingService:
+    """resolve the process-wide routing service built during startup"""
+    return request.app.state.router
+
+
+async def get_usage_recorder(
     pricing: PricingTable = Depends(get_pricing_table),
     session: AsyncSession = Depends(get_session),
 ) -> UsageRecorder:
@@ -36,12 +42,13 @@ def get_usage_recorder(
     return UsageRecorder(pricing, UsageRepo(session))
 
 
-def get_gateway_service(
+async def get_gateway_service(
     registry: AdapterRegistry = Depends(get_registry),
+    router: RoutingService = Depends(get_router),
     recorder: UsageRecorder = Depends(get_usage_recorder),
 ) -> GatewayService:
-    """construct a GatewayService over the shared registry and the recorder"""
-    return GatewayService(registry, recorder)
+    """construct a GatewayService over the shared registry, router and recorder"""
+    return GatewayService(registry, router, recorder)
 
 
 async def get_current_api_key_id(

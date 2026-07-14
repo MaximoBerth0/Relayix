@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from app.api.v1 import chat
 from app.core.accounting.pricing import build_pricing_table
 from app.core.adapters.registry import build_registry
+from app.core.routing.router import build_router
 from app.infra.database.session import AsyncSessionLocal
 from app.infra.global_exceptions import AppError
 from app.observability.logging import setup_logging
@@ -19,6 +20,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Build shared, long-lived resources once per process"""
     setup_logging()  # configure logging before anything emits
     app.state.registry = build_registry()
+    app.state.router = build_router()
 
     # load the pricing rates once and hold the table for the recorder to price against
     async with AsyncSessionLocal() as session:
