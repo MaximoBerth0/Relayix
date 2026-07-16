@@ -1,6 +1,7 @@
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAIError
 
 from app.core.adapters.base import ProviderAdapter
+from app.core.exceptions import UpstreamError
 from app.models.domain.chat import ChatRequest, ChatResponse
 from app.models.domain.enums import ProviderEnum
 
@@ -28,11 +29,14 @@ class OpenAIAdapter(ProviderAdapter):
             for m in request.messages
         ]
 
-        response = await self._client.chat.completions.create(
-            model=request.model,
-            max_tokens=request.max_tokens or _DEFAULT_MAX_TOKENS,
-            messages=messages,    # role system/assistant/user with content here
-        )
+        try:
+            response = await self._client.chat.completions.create(
+                model=request.model,
+                max_tokens=request.max_tokens or _DEFAULT_MAX_TOKENS,
+                messages=messages,    # role system/assistant/user with content here
+            )
+        except OpenAIError as exc:
+            raise UpstreamError(f"openai request failed: {exc}") from exc
 
         choice = response.choices[0]
         text = choice.message.content or ""

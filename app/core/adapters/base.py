@@ -8,11 +8,7 @@ if TYPE_CHECKING:
 
 
 class ProviderAdapter(ABC):
-    """Contract every provider (OpenAI, Anthropic) must implement.
-
-    The rest of the system only ever talks to this interface, never to a
-    concrete provider
-    """
+    """Contract every provider (OpenAI, Anthropic) must implement"""
 
     @abstractmethod
     async def complete(self, request: ChatRequest) -> ChatResponse:

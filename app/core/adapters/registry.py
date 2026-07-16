@@ -1,6 +1,7 @@
 from app.core.adapters.anthropic_adapter import AnthropicAdapter
 from app.core.adapters.base import ProviderAdapter
 from app.core.adapters.openai_adapter import OpenAIAdapter
+from app.core.exceptions import AdapterNotRegistered
 from app.infra.config import Settings, settings
 from app.models.domain.enums import ProviderEnum
 
@@ -18,13 +19,14 @@ class AdapterRegistry:
         try:
             return self._adapters[provider]
         except KeyError:
-            raise KeyError(f"no adapter registered for provider {provider!r}") from None
+            raise AdapterNotRegistered(
+                f"no adapter registered for provider {provider!r}"
+            ) from None
 
 
 def build_registry(config: Settings = settings) -> AdapterRegistry:
     """Construct the registry from configured credentials.
-
-    A provider is only registered when its API key is set, so a deployment can
+    a provider is only registered when its API key is set, so a deployment can
     run with just one provider configured.
     """
     registry = AdapterRegistry()

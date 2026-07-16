@@ -5,8 +5,7 @@ from app.infra.global_exceptions import ProviderNotAvailable
 from app.models.domain.enums import ProviderEnum
 
 # routing catalog: maps a caller-facing routing key (a capability "tier") to the
-# concrete (provider, model) candidates that can serve it. Keeping this as data
-# means adding a provider or model is a config change, not a code change.
+# concrete (provider, model) candidates that can serve it. 
 DEFAULT_CATALOG: dict[str, list[Candidate]] = {
     "fast": [
         Candidate(ProviderEnum.OPENAI, "gpt-4o-mini"),
@@ -24,11 +23,6 @@ DEFAULT_PRIORITY: list[ProviderEnum] = [ProviderEnum.OPENAI, ProviderEnum.ANTHRO
 
 class RoutingService:
     """Turns a routing key into an ordered list of candidates to try.
-
-    It owns *which* providers can serve a request (the catalog) and delegates
-    *in what order* to a RoutingStrategy. It deliberately does not execute the
-    request: the gateway walks the returned list and handles failover, so the
-    circuit breaker can later filter this list without changing either side.
     """
 
     def __init__(
@@ -41,7 +35,6 @@ class RoutingService:
 
     def candidates_for(self, model: str) -> list[Candidate]:
         """Ranked candidates for a routing tier, best first.
-
         Raises ProviderNotAvailable when the tier is unknown.
         """
         candidates = self._catalog.get(model)

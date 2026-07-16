@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Iterable
 
+from app.core.exceptions import PricingRateNotFound
 from app.models.domain.enums import ProviderEnum
 from app.models.domain.pricing_rate import PricingRate
 
@@ -31,7 +32,7 @@ class PricingTable:
         history = self._rates.get((provider, model))
         effective = [rate for rate in history or [] if rate.effective_from <= as_of]
         if not effective:
-            raise KeyError(
+            raise PricingRateNotFound(
                 f"no pricing rate in effect for provider {provider!r} "
                 f"model {model!r} as of {as_of.isoformat()}"
             )

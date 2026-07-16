@@ -3,6 +3,7 @@ from dataclasses import replace
 from uuid import UUID
 
 from app.core.adapters.registry import AdapterRegistry
+from app.core.exceptions import AdapterNotRegistered, UpstreamError
 from app.core.accounting.usage_recorder import UsageRecorder
 from app.core.routing.router import RoutingService
 from app.infra.global_exceptions import ProviderNotAvailable
@@ -23,16 +24,14 @@ class GatewayService:
         self._recorder = recorder
 
     async def complete(self, request: ChatRequest, api_key_id: UUID) -> ChatResponse:
-        # The router turns the requested tier (e.g. "smart") into an ordered list
-        # of concrete provider candidates. We try them best-first, failing over
-        # to the next one when a provider is unconfigured or errors.
+
         candidates = self._router.candidates_for(request.model)
 
         last_error: Exception | None = None
         for candidate in candidates:
             try:
                 adapter = self._registry.get(candidate.provider)
-            except KeyError:
+            except AdapterNotRegistered:
                 # tier lists a provider this deployment didn't configure; skip it.
                 logger.warning(
                     "no adapter configured for candidate provider",
@@ -53,7 +52,7 @@ class GatewayService:
 
             try:
                 response = await adapter.complete(upstream)
-            except Exception as exc:  # noqa: BLE001
+            except UpstreamError as exc:
                 logger.warning(
                     "candidate failed, failing over",
                     extra={"provider": candidate.provider.value, "model": candidate.model},

@@ -1,6 +1,7 @@
 from app.core.accounting.anthropic_counter import AnthropicCounter
 from app.core.accounting.openai_counter import OpenAICounter
 from app.core.accounting.token_counter import TokenCounter
+from app.core.exceptions import CounterNotRegistered
 from app.models.domain.enums import ProviderEnum
 
 
@@ -17,7 +18,9 @@ class CounterRegistry:
         try:
             return self._counters[provider]
         except KeyError:
-            raise KeyError(f"no counter registered for provider {provider!r}") from None
+            raise CounterNotRegistered(
+                f"no counter registered for provider {provider!r}"
+            ) from None
 
 
 def build_registry() -> CounterRegistry:

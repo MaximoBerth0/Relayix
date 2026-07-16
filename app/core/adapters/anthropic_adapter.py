@@ -1,6 +1,7 @@
-from anthropic import AsyncAnthropic
+from anthropic import AnthropicError, AsyncAnthropic
 
 from app.core.adapters.base import ProviderAdapter
+from app.core.exceptions import UpstreamError
 from app.models.domain.chat import ChatRequest, ChatResponse
 from app.models.domain.enums import ProviderEnum
 
@@ -33,12 +34,15 @@ class AnthropicAdapter(ProviderAdapter):
             if m.role != "system"
         ]
 
-        response = await self._client.messages.create(
-            model=request.model,
-            max_tokens=request.max_tokens or _DEFAULT_MAX_TOKENS,
-            system=system_prompt, # role system with content here
-            messages=messages,    # role assistant/user with content here
-        )
+        try:
+            response = await self._client.messages.create(
+                model=request.model,
+                max_tokens=request.max_tokens or _DEFAULT_MAX_TOKENS,
+                system=system_prompt, # role system with content here
+                messages=messages,    # role assistant/user with content here
+            )
+        except AnthropicError as exc:
+            raise UpstreamError(f"anthropic request failed: {exc}") from exc
 
         text = "".join(block.text for block in response.content if block.type == "text")
 
