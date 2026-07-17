@@ -45,3 +45,13 @@ class UpstreamError(CoreError):
             status_code=502,
             error_code="UPSTREAM_ERROR",
         )
+
+
+class CircuitOpen(UpstreamError):
+    def __init__(self, message: str = "Provider circuit is open"):
+        CoreError.__init__(
+            self,
+            message=message,
+            status_code=503,
+            error_code="CIRCUIT_OPEN",
+        )

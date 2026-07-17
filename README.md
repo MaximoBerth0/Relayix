@@ -26,67 +26,34 @@ Full technical documentation — architecture, request flow, storage design, and
 ```
 relayix/
 ├── app/
-│   ├── main.py                      # FastAPI app entrypoint
+│   ├── main.py            # FastAPI entrypoint: app wiring, lifespan, error handler
 │   │
-│   ├── api/
-│   │   ├── v1/
-│   │   │   ├── chat.py              # /v1/chat/completions router
-│   │   │   ├── usage.py             # usage/cost query endpoints
-│   │   │   └── health.py            # health + circuit breaker status
-│   │   └── schemas/
-│   │       ├── request.py
-│   │       └── response.py
+│   ├── api/               # HTTP delivery layer: versioned routers, schemas, deps
+│   │   ├── v1/            # /v1 endpoints (chat, usage, health) + request/response schemas
+│   │   └── deps.py        # shared FastAPI dependencies (auth, injected services)
 │   │
-│   ├── core/
-│   │   ├── adapters/
-│   │   │   ├── base.py              # ProviderAdapter interface
-│   │   │   ├── openai_adapter.py
-│   │   │   ├── anthropic_adapter.py
-│   │   │   └── registry.py             # provider registry/factory
-│   │   │
-│   │   ├── routing/
-│   │   │   ├── router.py            # RoutingService
-│   │   │   └── strategies.py        # priority / cost-based / latency-based
-│   │   │
-│   │   ├── resilience/
-│   │   │   ├── circuit_breaker.py   # state machine
-│   │   │   └── store.py             # in-memory state (Redis later)
-│   │   │
-│   │   ├── ratelimit/
-│   │   │   ├── limiter.py
-│   │   │   └── store.py
-│   │   │
-│   │   └── accounting/
-│   │       ├── token_counter.py     # per-provider tokenizers
-│   │       ├── pricing.py           # pricing tables
-│   │       └── usage_recorder.py
+│   ├── core/              # provider-agnostic business logic (no HTTP, no DB)
+│   │   ├── adapters/      # per-provider clients behind one ProviderAdapter interface
+│   │   ├── routing/       # tier → candidate resolution and ranking strategies
+│   │   ├── resilience/    # circuit breaker and failover state
+│   │   ├── ratelimit/     # per-key rate limiting
+│   │   └── accounting/    # token counting, pricing tables, usage recording
 │   │
-│   ├── services/
-│   │   └── gateway_service.py       # orchestrates the full pipeline
+│   ├── services/          # orchestration: composes core into the request pipeline
 │   │
-│   ├── repositories/
-│   │   ├── usage_repository.py
-│   │   ├── api_key_repository.py
-│   │   └── pricing_repository.py
+│   ├── repositories/      # persistence access for usage, api keys and pricing
 │   │
-│   ├── models/
-│   │   ├── domain/                  # dataclasses / internal models
-│   │   └── db/                      # ORM models
+│   ├── models/            # internal data models
+│   │   ├── domain/        # domain dataclasses / internal models
+│   │   └── db/            # ORM models
 │   │
-│   ├── middleware/
-│   │   ├── auth.py
-│   │   └── logging.py
+│   ├── infra/             # framework glue: config, base exceptions
+│   │   ├── security/      # crypto / hashing helpers
+│   │   └── database/      # engine, session and ORM base
 │   │
-│   └── config.py
+│   └── observability/     # logging setup and request-id middleware
 │
-├── tests/
-│   ├── unit/
-│   │   ├── test_circuit_breaker.py
-│   │   ├── test_routing.py
-│   │   └── test_accounting.py
-│   └── integration/
-│       └── test_chat_endpoint.py
-│
+├── tests/                 # unit and integration suites
 ├── pyproject.toml
 └── README.md
 ```
