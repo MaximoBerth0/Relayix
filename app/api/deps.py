@@ -10,7 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.accounting.pricing import PricingTable
 from app.core.accounting.usage_recorder import UsageRecorder
 from app.core.adapters.registry import AdapterRegistry
+from app.core.ratelimit.base import RateLimiter
 from app.core.routing.router import RoutingService
+from app.infra.config import settings
 from app.infra.database.session import get_session
 from app.infra.global_exceptions import Unauthorized
 from app.infra.security.crypto import hash_api_key
@@ -51,11 +53,13 @@ async def get_gateway_service(
     return GatewayService(registry, router, recorder)
 
 
-async def get_current_api_key_id(
+async def get_current_api_key(
     authorization: str | None = Header(default=None),
     session: AsyncSession = Depends(get_session),
-) -> UUID:
-    """authenticate the caller's bearer token and return its api_key id"""
+) -> Api_Key:
+    """authenticate the caller's bearer token and return its api_key row.
+    returns the whole row (not just the id) 
+    """
     if not authorization or not authorization.startswith("Bearer "):
         raise Unauthorized()
 
@@ -73,4 +77,25 @@ async def get_current_api_key_id(
     if api_key is None:
         raise Unauthorized()
 
+    return api_key
+
+
+async def get_current_api_key_id(
+    api_key: Api_Key = Depends(get_current_api_key),
+) -> UUID:
+    """the authenticated caller's api_key id"""
     return api_key.id
+
+
+async def get_rate_limiter(request: Request) -> RateLimiter:
+    """resolve the process-wide resilient rate limiter built during startup"""
+    return request.app.state.rate_limiter
+
+
+async def enforce_rate_limit(
+    api_key: Api_Key = Depends(get_current_api_key),
+    limiter: RateLimiter = Depends(get_rate_limiter),
+) -> None:
+    """throttle the caller before the request reaches a provider"""
+    rpm = api_key.rate_limit_rpm or settings.default_rate_limit_rpm
+    await limiter.check(api_key.id, rpm)

@@ -46,6 +46,19 @@ class Settings(BaseSettings):
     # Fallback limit for keys that don't specify their own rate_limit_rpm
     default_rate_limit_rpm: int = 60
 
+    # --- rate limiting (Redis primary, in-memory fallback) ---
+    # where the shared token buckets live. Redis is the source of truth so the
+    # limit is enforced globally across every worker/instance.
+    redis_url: str = "redis://localhost:6379/0"
+    redis_connect_timeout_s: float = 2.0   # give up establishing a connection after this
+    redis_command_timeout_s: float = 2.0   # give up on a single command after this
+    redis_max_connections: int = 20        # connection pool ceiling
+
+    # circuit breaker guarding Redis itself: when Redis is unreachable we stop
+    # calling it (open) and serve from the in-memory limiter until it recovers.
+    ratelimit_breaker_fail_threshold: int = 3
+    ratelimit_breaker_reset_timeout_s: float = 10.0
+
     # consecutive failures before a provider is taken out of rotation (open).
     circuit_breaker_fail_threshold: int = 5
     # how long to stay open before a single test request is allowed (half-open).

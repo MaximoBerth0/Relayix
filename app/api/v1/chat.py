@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, status
 
 from app.services.gateway_service import GatewayService
-from app.api.deps import get_current_api_key_id, get_gateway_service
+from app.api.deps import enforce_rate_limit, get_current_api_key_id, get_gateway_service
 from app.api.v1.schemas.chat import ChatRequestSchema, ChatResponseSchema
 
 router = APIRouter(
@@ -16,6 +16,7 @@ router = APIRouter(
     "/completions",
     response_model=ChatResponseSchema,
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(enforce_rate_limit)],
 )
 async def create_completion(
     payload: ChatRequestSchema,
