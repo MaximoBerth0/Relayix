@@ -1,27 +1,32 @@
-# Relayix 
+# Relayix
 
 A FastAPI-native gateway that sits in front of your LLM providers: multi-provider routing with circuit-breaker failover, token-based cost accounting, and rate limiting.
 
 ## Overview
 
 Relayix is a FastAPI-native gateway that sits in front of your LLM providers. Instead of application code calling OpenAI, Anthropic, or other providers directly, it calls Relayix — which handles routing between providers, fails over automatically when one is having issues, enforces rate limits, and tracks token-based cost per request.
- 
-The goal is to centralize the concerns that would otherwise be duplicated in every app that talks to an LLM: which provider to use, what to do when one goes down, how many requests a caller can make, and what everything actually costs.
+
+The goal is to centralize the concerns that would otherwise be duplicated in every app that talks to an LLM: which provider to use, what to do when one goes down, how many requests a caller can make, and what everything actually costs. By moving these concerns behind a single gateway, applications stay thin and consistent, and operational policy lives in one place.
+
+Full technical documentation — architecture, request flow, storage design, and the circuit breaker state machine — lives separately from this README.
 
 ![Flow](docs/relayix_request_path.png)
- 
-**Core capabilities:**
- 
+
+## Features
+
 - **Multi-provider routing** — requests are routed across configured providers based on availability and strategy.
 - **Circuit-breaker failover** — unhealthy providers are automatically taken out of rotation and periodically re-tested, so an outage on one provider doesn't fail requests for your users.
 - **Token-based cost accounting** — token usage and cost are recorded per request, queryable after the fact.
 - **Rate limiting** — requests are throttled per API key before they reach a provider.
-Full technical documentation — architecture, request flow, storage design, and the circuit breaker state machine — lives separately from this README.
- 
 
----
+## Tech Stack
 
-## Architecture 
+- **Python** / **FastAPI** — async HTTP delivery layer.
+- **SQLAlchemy** — ORM and persistence.
+- **Alembic** — database schema migrations.
+- **Docker** — containerized build and deployment.
+
+## Project Structure
 
 ```
 relayix/
@@ -58,3 +63,6 @@ relayix/
 └── README.md
 ```
 
+## License
+
+This project is licensed under the MIT License.
