@@ -55,3 +55,32 @@ class CircuitOpen(UpstreamError):
             status_code=503,
             error_code="CIRCUIT_OPEN",
         )
+
+
+class RateLimitExceeded(CoreError):
+    """raised when a caller has spent its allowance for the current window"""
+
+    def __init__(self, retry_after_s: float, message: str = "Rate limit exceeded"):
+        self.retry_after_s = retry_after_s
+        super().__init__(
+            message=message,
+            status_code=429,
+            error_code="RATE_LIMITED",
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        body = super().to_dict()
+        body["retry_after_s"] = round(self.retry_after_s, 3)
+        return body
+
+
+class RateLimiterUnavailable(CoreError):
+    """Internal signal, a limiter backend could not be reached.
+    """
+
+    def __init__(self, message: str = "Rate limiter backend unavailable"):
+        super().__init__(
+            message=message,
+            status_code=503,
+            error_code="RATE_LIMITER_UNAVAILABLE",
+        )
