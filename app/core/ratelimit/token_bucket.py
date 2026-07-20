@@ -1,18 +1,4 @@
-"""In-memory token-bucket limiter.
-
-Pure, provider-agnostic logic — no Redis, no HTTP, no DB — so it lives in core.
-It is the fallback the gateway serves from while Redis is unreachable, and it is
-trivially unit-testable on its own.
-
-Token bucket, per key:
-- the bucket holds up to `rpm` tokens (this is the burst allowance);
-- it refills continuously at `rpm / 60` tokens per second;
-- each request costs one token; no token means the request is denied.
-
-State is per-process. Under N workers each keeps its own buckets, so while this
-limiter is in charge the effective ceiling is ~N * rpm. That is the accepted,
-deliberate degradation for a Redis outage: stay available, loosen the limit.
-"""
+"""In-memory token-bucket limiter"""
 
 import asyncio
 import time
