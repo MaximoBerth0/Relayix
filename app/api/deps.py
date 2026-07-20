@@ -19,6 +19,7 @@ from app.infra.security.crypto import hash_api_key
 from app.models.db.api_key import Api_Key
 from app.repositories.usage_repo import UsageRepo
 from app.services.gateway_service import GatewayService
+from app.services.usage_service import UsageService
 
 
 async def get_registry(request: Request) -> AdapterRegistry:
@@ -78,6 +79,13 @@ async def get_current_api_key(
         raise Unauthorized()
 
     return api_key
+
+
+async def get_usage_service(
+    session: AsyncSession = Depends(get_session),
+) -> UsageService:
+    """construct a request-scoped UsageService over the current DB session"""
+    return UsageService(UsageRepo(session))
 
 
 async def get_current_api_key_id(
