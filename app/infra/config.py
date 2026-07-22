@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     ratelimit_breaker_fail_threshold: int = 3
     ratelimit_breaker_reset_timeout_s: float = 10.0
 
+    idempotency_inflight_ttl_s: int = 120
+    # how long a completed response stays replayable for client retries (24h)
+    idempotency_ttl_s: int = 86_400
+
     # consecutive failures before a provider is taken out of rotation (open).
     circuit_breaker_fail_threshold: int = 5
     # how long to stay open before a single test request is allowed (half-open).

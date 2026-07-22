@@ -20,3 +20,9 @@ class FailoverPolicy(str, Enum):
     """
     AT_MOST_ONCE = "at_most_once"
     AT_LEAST_ONCE = "at_least_once"
+
+
+class IdempotencyStatus(str, Enum):
+    """Lifecycle of an idempotency record in the store."""
+    IN_PROGRESS = "in_progress"  # a request owns the key and is still running
+    COMPLETED = "completed"      # the response is stored and replayable

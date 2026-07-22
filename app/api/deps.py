@@ -15,10 +15,12 @@ from app.core.routing.router import RoutingService
 from app.infra.config import settings
 from app.infra.database.session import get_session
 from app.infra.global_exceptions import Unauthorized
+from app.infra.idempotency.redis_store import RedisIdempotencyStore
 from app.infra.security.crypto import hash_api_key
 from app.models.db.api_key import Api_Key
 from app.repositories.usage_repo import UsageRepo
 from app.services.gateway_service import GatewayService
+from app.services.idempotency_service import IdempotencyService
 from app.services.usage_service import UsageService
 
 
@@ -52,6 +54,16 @@ async def get_gateway_service(
 ) -> GatewayService:
     """construct a GatewayService over the shared registry, router and recorder"""
     return GatewayService(registry, router, recorder)
+
+
+async def get_idempotency_service(request: Request) -> IdempotencyService:
+    """construct an IdempotencyService over the shared Redis client"""
+    store = RedisIdempotencyStore(
+        request.app.state.redis,
+        inflight_ttl_s=settings.idempotency_inflight_ttl_s,
+        completed_ttl_s=settings.idempotency_ttl_s,
+    )
+    return IdempotencyService(store)
 
 
 async def get_current_api_key(
