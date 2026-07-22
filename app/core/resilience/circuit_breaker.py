@@ -65,3 +65,9 @@ class CircuitBreaker:
             ):
                 self._state = CircuitState.OPEN
                 self._opened_at = time.monotonic()
+
+    async def record_abort(self) -> None:
+        """release an in-flight trial without recording success or failure
+        """
+        async with self._lock:
+            self._trial_in_flight = False

@@ -44,14 +44,19 @@ class AnthropicAdapter(ProviderAdapter):
         except AnthropicError as exc:
             raise UpstreamError(f"anthropic request failed: {exc}") from exc
 
-        text = "".join(block.text for block in response.content if block.type == "text")
+        # A 200 with a malformed/empty payload (missing content or usage) is still
+        # an upstream failure 
+        try:
+            text = "".join(block.text for block in response.content if block.type == "text")
 
-        return ChatResponse(
-            provider=ProviderEnum.ANTHROPIC,
-            model=response.model,
-            content=text,
-            tokens_in=response.usage.input_tokens,
-            tokens_out=response.usage.output_tokens,
-            finish_reason=_FINISH_REASON_MAP.get(response.stop_reason, "stop"),
-            request_id=response.id,
-        )
+            return ChatResponse(
+                provider=ProviderEnum.ANTHROPIC,
+                model=response.model,
+                content=text,
+                tokens_in=response.usage.input_tokens,
+                tokens_out=response.usage.output_tokens,
+                finish_reason=_FINISH_REASON_MAP.get(response.stop_reason, "stop"),
+                request_id=response.id,
+            )
+        except (IndexError, AttributeError, TypeError) as exc:
+            raise UpstreamError(f"anthropic returned a malformed response: {exc}") from exc

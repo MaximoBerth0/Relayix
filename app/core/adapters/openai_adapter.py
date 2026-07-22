@@ -38,15 +38,20 @@ class OpenAIAdapter(ProviderAdapter):
         except OpenAIError as exc:
             raise UpstreamError(f"openai request failed: {exc}") from exc
 
-        choice = response.choices[0]
-        text = choice.message.content or ""
+        # A 200 with a malformed/empty payload (no choices, missing usage) is still
+        # an upstream failure
+        try:
+            choice = response.choices[0]
+            text = choice.message.content or ""
 
-        return ChatResponse(
-            provider=ProviderEnum.OPENAI,
-            model=response.model,
-            content=text,
-            tokens_in=response.usage.prompt_tokens,
-            tokens_out=response.usage.completion_tokens,
-            finish_reason=_FINISH_REASON_MAP.get(choice.finish_reason, "stop"),
-            request_id=response.id,
-        )
+            return ChatResponse(
+                provider=ProviderEnum.OPENAI,
+                model=response.model,
+                content=text,
+                tokens_in=response.usage.prompt_tokens,
+                tokens_out=response.usage.completion_tokens,
+                finish_reason=_FINISH_REASON_MAP.get(choice.finish_reason, "stop"),
+                request_id=response.id,
+            )
+        except (IndexError, AttributeError, TypeError) as exc:
+            raise UpstreamError(f"openai returned a malformed response: {exc}") from exc

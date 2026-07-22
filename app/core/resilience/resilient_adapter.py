@@ -40,8 +40,11 @@ class ResilientAdapter(ProviderAdapter):
             raise UpstreamError(
                 f"{self._provider.value} timed out after {self._timeout_s}s"
             ) from exc
-        except UpstreamError:
+        except Exception:
             await self._breaker.record_failure()
+            raise
+        except BaseException:
+            await self._breaker.record_abort()
             raise
 
         await self._breaker.record_success()
