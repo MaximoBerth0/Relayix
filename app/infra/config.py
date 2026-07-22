@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
 
     # how long to wait on an upstream provider before giving up (seconds).
-    provider_timeout_s: float = 30.0
+    provider_timeout_s: float = 40.0
 
     # Fallback limit for keys that don't specify their own rate_limit_rpm
     default_rate_limit_rpm: int = 60

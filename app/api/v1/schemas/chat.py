@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.models.domain.chat import ChatRequest, ChatResponse, Message
-from app.models.domain.enums import ProviderEnum
+from app.models.domain.enums import FailoverPolicy, ProviderEnum
 
 
 class MessageSchema(BaseModel):
@@ -24,6 +24,7 @@ class ChatRequestSchema(BaseModel):
     messages: list[MessageSchema] = Field(min_length=1)
     max_tokens: int | None = Field(default=None, gt=0)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    failover_policy: FailoverPolicy = Field(default=FailoverPolicy.AT_MOST_ONCE)
 
     def to_domain(self) -> ChatRequest:
         return ChatRequest(
@@ -31,6 +32,7 @@ class ChatRequestSchema(BaseModel):
             messages=[message.to_domain() for message in self.messages],
             max_tokens=self.max_tokens,
             temperature=self.temperature,
+            failover_policy=self.failover_policy,
         )
 
 

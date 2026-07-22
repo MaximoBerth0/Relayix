@@ -3,11 +3,16 @@ from dataclasses import replace
 from uuid import UUID
 
 from app.core.adapters.registry import AdapterRegistry
-from app.core.exceptions import AdapterNotRegistered, UpstreamError
+from app.core.exceptions import (
+    AdapterNotRegistered,
+    UpstreamAmbiguous,
+    UpstreamUnavailable,
+)
 from app.core.accounting.usage_recorder import UsageRecorder
 from app.core.routing.router import RoutingService
 from app.infra.global_exceptions import ProviderNotAvailable
 from app.models.domain.chat import ChatRequest, ChatResponse
+from app.models.domain.enums import FailoverPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -52,14 +57,30 @@ class GatewayService:
 
             try:
                 response = await adapter.complete(upstream)
-            except UpstreamError as exc:
+            except UpstreamUnavailable as exc:
                 logger.warning(
-                    "candidate failed, failing over",
+                    "candidate unavailable, failing over",
                     extra={"provider": candidate.provider.value, "model": candidate.model},
                     exc_info=exc,
                 )
                 last_error = exc
                 continue
+            except UpstreamAmbiguous as exc:
+                # the request may already have run and billed. nobody knows
+                last_error = exc
+                if request.failover_policy is FailoverPolicy.AT_LEAST_ONCE:
+                    logger.warning(
+                        "candidate outcome unknown, failing over (at-least-once)",
+                        extra={"provider": candidate.provider.value, "model": candidate.model},
+                        exc_info=exc,
+                    )
+                    continue
+                logger.error(
+                    "candidate outcome unknown, not failing over (at-most-once)",
+                    extra={"provider": candidate.provider.value, "model": candidate.model},
+                    exc_info=exc,
+                )
+                raise
 
             logger.info(
                 "completion done",

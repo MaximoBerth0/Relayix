@@ -1,7 +1,13 @@
-from anthropic import AnthropicError, AsyncAnthropic
+from anthropic import (
+    AnthropicError,
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AsyncAnthropic,
+)
 
 from app.core.adapters.base import ProviderAdapter
-from app.core.exceptions import UpstreamError
+from app.core.exceptions import UpstreamAmbiguous, UpstreamUnavailable
 from app.models.domain.chat import ChatRequest, ChatResponse
 from app.models.domain.enums import ProviderEnum
 
@@ -41,11 +47,29 @@ class AnthropicAdapter(ProviderAdapter):
                 system=system_prompt, # role system with content here
                 messages=messages,    # role assistant/user with content here
             )
+        except APITimeoutError as exc:
+            # the request was sent, we don't know if the model ran it.
+            raise UpstreamAmbiguous(f"anthropic timed out: {exc}") from exc
+        
+        except APIConnectionError as exc:
+            # never established a connection so the request never executed.
+            raise UpstreamUnavailable(f"anthropic connection failed: {exc}") from exc
+        
+        except APIStatusError as exc:
+            # a 5xx may have happened after the model ran. a 4xx is a pre-execution
+            # rejection that never billed.
+            if exc.status_code >= 500:
+                raise UpstreamAmbiguous(
+                    f"anthropic server error {exc.status_code}: {exc}"
+                ) from exc
+            raise UpstreamUnavailable(
+                f"anthropic rejected request {exc.status_code}: {exc}"
+            ) from exc
+        
         except AnthropicError as exc:
-            raise UpstreamError(f"anthropic request failed: {exc}") from exc
+            # unknown failure mode, be conservative and treat it as ambiguous.
+            raise UpstreamAmbiguous(f"anthropic request failed: {exc}") from exc
 
-        # A 200 with a malformed/empty payload (missing content or usage) is still
-        # an upstream failure 
         try:
             text = "".join(block.text for block in response.content if block.type == "text")
 
@@ -59,4 +83,6 @@ class AnthropicAdapter(ProviderAdapter):
                 request_id=response.id,
             )
         except (IndexError, AttributeError, TypeError) as exc:
-            raise UpstreamError(f"anthropic returned a malformed response: {exc}") from exc
+            # a 200 we couldn't parse: the request DID execute and bill, so this
+            # is ambiguous for failover, not a clean retry.
+            raise UpstreamAmbiguous(f"anthropic returned a malformed response: {exc}") from exc

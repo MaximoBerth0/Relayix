@@ -4,7 +4,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from app.core.adapters.base import ProviderAdapter
-from app.core.exceptions import CircuitOpen, UpstreamError
+from app.core.exceptions import CircuitOpen, UpstreamAmbiguous
 from app.core.resilience.circuit_breaker import CircuitBreaker
 
 if TYPE_CHECKING:
@@ -35,14 +35,19 @@ class ResilientAdapter(ProviderAdapter):
         try:
             async with asyncio.timeout(self._timeout_s):
                 response = await self._inner.complete(request)
+                
         except TimeoutError as exc:
+            # Ambiguous, not safe to retry
+            # blindly on another provider.
             await self._breaker.record_failure()
-            raise UpstreamError(
+            raise UpstreamAmbiguous(
                 f"{self._provider.value} timed out after {self._timeout_s}s"
             ) from exc
+        
         except Exception:
             await self._breaker.record_failure()
             raise
+
         except BaseException:
             await self._breaker.record_abort()
             raise

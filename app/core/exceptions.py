@@ -39,15 +39,42 @@ class AdapterNotRegistered(CoreError):
 
 
 class UpstreamError(CoreError):
-    def __init__(self, message: str = "Upstream provider request failed"):
+    """Base for any upstream provider failure.
+
+      - UpstreamUnavailable: the request provably never executed.
+      - UpstreamAmbiguous:   the request may have executed (double-spend risk).
+    """
+
+    def __init__(
+        self,
+        message: str = "Upstream provider request failed",
+        error_code: str = "UPSTREAM_ERROR",
+    ):
         super().__init__(
             message=message,
             status_code=502,
-            error_code="UPSTREAM_ERROR",
+            error_code=error_code,
         )
 
 
-class CircuitOpen(UpstreamError):
+class UpstreamUnavailable(UpstreamError):
+    """The provider provably did NOT execute the request — the call never left
+    us, or it was rejected before reaching the model (connection refused, DNS,
+    TLS, a pre-execution 4xx, or an open circuit). Always safe to fail over."""
+
+    def __init__(self, message: str = "Upstream provider unavailable"):
+        super().__init__(message=message, error_code="UPSTREAM_UNAVAILABLE")
+
+
+class UpstreamAmbiguous(UpstreamError):
+    """The request may have executed and billed, Failing over to a
+    different provider risks a double-spend, so it is gated on FailoverPolicy."""
+
+    def __init__(self, message: str = "Upstream provider outcome unknown"):
+        super().__init__(message=message, error_code="UPSTREAM_AMBIGUOUS")
+
+
+class CircuitOpen(UpstreamUnavailable):
     def __init__(self, message: str = "Provider circuit is open"):
         CoreError.__init__(
             self,

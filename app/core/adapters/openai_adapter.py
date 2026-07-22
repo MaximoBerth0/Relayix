@@ -1,7 +1,13 @@
-from openai import AsyncOpenAI, OpenAIError
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AsyncOpenAI,
+    OpenAIError,
+)
 
 from app.core.adapters.base import ProviderAdapter
-from app.core.exceptions import UpstreamError
+from app.core.exceptions import UpstreamAmbiguous, UpstreamUnavailable
 from app.models.domain.chat import ChatRequest, ChatResponse
 from app.models.domain.enums import ProviderEnum
 
@@ -35,11 +41,30 @@ class OpenAIAdapter(ProviderAdapter):
                 max_tokens=request.max_tokens or _DEFAULT_MAX_TOKENS,
                 messages=messages,    # role system/assistant/user with content here
             )
-        except OpenAIError as exc:
-            raise UpstreamError(f"openai request failed: {exc}") from exc
 
-        # A 200 with a malformed/empty payload (no choices, missing usage) is still
-        # an upstream failure
+        except APITimeoutError as exc:
+            # the request was sent, we don't know if the model ran it.
+            raise UpstreamAmbiguous(f"openai timed out: {exc}") from exc
+        
+        except APIConnectionError as exc:
+            # never established a connection so the request never executed.
+            raise UpstreamUnavailable(f"openai connection failed: {exc}") from exc
+        
+        except APIStatusError as exc:
+            # a 5xx may have happened after the model ran. a 4xx is a pre-execution
+            # rejection that never billed.
+            if exc.status_code >= 500:
+                raise UpstreamAmbiguous(
+                    f"openai server error {exc.status_code}: {exc}"
+                ) from exc
+            raise UpstreamUnavailable(
+                f"openai rejected request {exc.status_code}: {exc}"
+            ) from exc
+        
+        except OpenAIError as exc:
+            # unknown failure mode: be conservative and treat it as ambiguous.
+            raise UpstreamAmbiguous(f"openai request failed: {exc}") from exc
+
         try:
             choice = response.choices[0]
             text = choice.message.content or ""
@@ -54,4 +79,6 @@ class OpenAIAdapter(ProviderAdapter):
                 request_id=response.id,
             )
         except (IndexError, AttributeError, TypeError) as exc:
-            raise UpstreamError(f"openai returned a malformed response: {exc}") from exc
+            # a 200 we couldn't parse, the request DID execute and bill, so this
+            # is ambiguous for failover, not a clean retry.
+            raise UpstreamAmbiguous(f"openai returned a malformed response: {exc}") from exc
