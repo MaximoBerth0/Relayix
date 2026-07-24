@@ -22,6 +22,9 @@ from app.infra.config import get_settings
 get_settings.cache_clear()
 
 # model imports, so Base.metadata knows about every table
+from datetime import UTC, datetime, timezone
+from decimal import Decimal
+
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -31,6 +34,7 @@ import app.models.db.api_key
 import app.models.db.pricing
 import app.models.db.usage_record
 from app.core.accounting.pricing import build_pricing_table
+from app.core.adapters.base import ProviderAdapter
 from app.core.adapters.registry import build_registry
 from app.core.ratelimit.resilient import ResilientRateLimiter
 from app.core.ratelimit.token_bucket import InMemoryRateLimiter
@@ -41,7 +45,12 @@ from app.infra.database.base import Base
 from app.infra.database.session import get_session
 from app.infra.ratelimit.redis_client import build_redis_client
 from app.infra.ratelimit.redis_limiter import RedisRateLimiter
+from app.infra.security.crypto import hash_api_key
 from app.main import app
+from app.models.db.api_key import Api_Key
+from app.models.db.pricing import Pricing
+from app.models.domain.chat import ChatRequest, ChatResponse
+from app.models.domain.enums import ProviderEnum
 from app.repositories.pricing_repo import load_pricing_rates
 
 # engine + session factory
@@ -131,3 +140,83 @@ async def client(db_session, redis_client):
         yield ac
 
     app.dependency_overrides.clear()
+
+
+# End-to-end flow helpers
+
+# The request path is entirely real (auth, rate limit, routing, gateway, usage
+# billing, serialization) except for the single seam that leaves the process:
+# the provider's outbound HTTP call. StubAdapter replaces that seam so a test
+# can drive the whole flow without touching OpenAI/Anthropic.
+
+# plaintext bearer token whose sha256 is seeded into the api_key table.
+API_TOKEN = "relayix-test-token"
+AUTH_HEADERS = {"Authorization": f"Bearer {API_TOKEN}"}
+
+
+class StubAdapter(ProviderAdapter):
+    """A ProviderAdapter that returns a canned response instead of calling out"""
+
+    def __init__(self, provider: ProviderEnum, content: str = "stubbed reply") -> None:
+        self._provider = provider
+        self._content = content
+        self.calls: list[ChatRequest] = []
+
+    async def complete(self, request: ChatRequest) -> ChatResponse:
+        self.calls.append(request)
+        return ChatResponse(
+            provider=self._provider,
+            model=request.model,
+            content=self._content,
+            tokens_in=12,
+            tokens_out=8,
+            finish_reason="stop",
+            request_id=f"stub-{len(self.calls)}",
+        )
+
+
+@pytest_asyncio.fixture
+async def seed_api_key(db_session) -> Api_Key:
+    """Insert an active API key whose bearer token is `API_TOKEN`."""
+    api_key = Api_Key(
+        name="test-key",
+        key_hash=hash_api_key(API_TOKEN),
+        is_active=True,
+    )
+    db_session.add(api_key)
+    await db_session.flush()
+    return api_key
+
+
+@pytest_asyncio.fixture
+async def seed_pricing(db_session) -> None:
+    """Insert pricing rows for the models the default catalog can route to,
+    so UsageRecorder can price a response instead of raising PricingRateNotFound.
+    """
+    rows = [
+        Pricing(
+            provider=ProviderEnum.OPENAI.value,
+            model="gpt-4o",
+            price_per_1k_input_tokens=Decimal("0.0025"),
+            price_per_1k_output_tokens=Decimal("0.010"),
+            effective_from=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        ),
+        Pricing(
+            provider=ProviderEnum.ANTHROPIC.value,
+            model="claude-sonnet-5",
+            price_per_1k_input_tokens=Decimal("0.003"),
+            price_per_1k_output_tokens=Decimal("0.015"),
+            effective_from=datetime(2020, 1, 1, tzinfo=UTC),
+        ),
+    ]
+    db_session.add_all(rows)
+    await db_session.flush()
+
+
+@pytest_asyncio.fixture
+async def stub_openai(db_session, seed_api_key, seed_pricing, client) -> StubAdapter:
+    """A fully wired flow client backed by a stubbed OpenAI provider."""
+    app.state.pricing = build_pricing_table(await load_pricing_rates(db_session))
+    adapter = StubAdapter(ProviderEnum.OPENAI)
+    app.state.registry.register(ProviderEnum.OPENAI, adapter)
+    return adapter
