@@ -1,9 +1,4 @@
-"""Redis-backed idempotency store.
-
-Runs on the same Redis the rate limiter uses. The whole dedup guarantee rests on
-one atomic primitive: SET key value NX EX ttl. Exactly one concurrent caller wins
-the SET, becomes the owner, and runs the request; everyone else reads the record.
-"""
+"""Redis-backed idempotency store"""
 
 from __future__ import annotations
 
