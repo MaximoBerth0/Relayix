@@ -121,7 +121,7 @@ async def client(db_session, redis_client):
         yield db_session
 
     app.dependency_overrides[get_session] = override_get_session
-
+    
     app.state.registry = build_registry()
     app.state.router = build_router()
     app.state.pricing = build_pricing_table(await load_pricing_rates(db_session))
@@ -173,6 +173,22 @@ class StubAdapter(ProviderAdapter):
             finish_reason="stop",
             request_id=f"stub-{len(self.calls)}",
         )
+
+
+class FailingAdapter(ProviderAdapter):
+    """A ProviderAdapter that always raises, to drive failover and error paths.
+
+    Records requests on `.calls` so a test can prove the provider was actually
+    attempted before failing over to the next candidate.
+    """
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+        self.calls: list[ChatRequest] = []
+
+    async def complete(self, request: ChatRequest) -> ChatResponse:
+        self.calls.append(request)
+        raise self._error
 
 
 @pytest_asyncio.fixture
