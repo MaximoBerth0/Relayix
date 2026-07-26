@@ -19,7 +19,7 @@ tests/
 │   ├── test_idempotency_service.py   # conflict on same-key/different-payload, concurrent races
 │   └── test_usage_service.py         # aggregation/filtering if /v1/usage exists
 │
-├── flow/         # already have: full stack through the
+├── flow/         # already have
 │
 └── fixtures/
     ├── adapters.py                   # StubAdapter, FailingAdapter, flaky/slow variants
