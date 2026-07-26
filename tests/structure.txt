@@ -1,0 +1,26 @@
+tests/
+├── conftest.py                      # shared fixtures: app, client, db_session, StubAdapter, etc.
+│
+├── unit/                            # fast, no DB/HTTP:  mirrors app/core/
+│   ├── routing/
+│   │   ├── test_tier_resolution.py      # tier → candidate list, ranking strategy
+│   │   └── test_model_override.py       # explicit model bypasses tier logic
+│   ├── resilience/
+│   │   ├── test_circuit_breaker_states.py   # closed→open→half-open→closed transitions
+│   │   └── test_error_classification.py     # retryable vs non-retryable errors
+│   ├── ratelimit/
+│   │   └── test_token_bucket.py             # pure logic: window math, reset timing
+│   └── accounting/
+│       ├── test_pricing_tables.py           # cost calc per provider/model
+│       └── test_token_counting.py           # zero/missing token fields
+│
+├── integration/                     # real DB/Redis, stubbed provider HTTP — mirrors app/services/
+│   ├── test_gateway_service.py       # orchestration: routing+breaker+accounting wired together
+│   ├── test_idempotency_service.py   # conflict on same-key/different-payload, concurrent races
+│   └── test_usage_service.py         # aggregation/filtering if /v1/usage exists
+│
+├── flow/         # already have: full stack through the
+│
+└── fixtures/
+    ├── adapters.py                   # StubAdapter, FailingAdapter, flaky/slow variants
+    └── factories.py                  # api key, usage record, pricing row factories

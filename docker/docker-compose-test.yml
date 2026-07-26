@@ -1,6 +1,6 @@
 # Backing services for the integration test suite. Run from the repo root:
 #   docker compose -f docker/docker-compose-test.yml up -d
-#   pytest testing/ -v
+#   pytest tests/ -v
 #   docker compose -f docker/docker-compose-test.yml down
 
 # No volumes on purpose: every run starts from an empty database and an empty
