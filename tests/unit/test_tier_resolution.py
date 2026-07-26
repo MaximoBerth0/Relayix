@@ -129,7 +129,7 @@ def test_custom_priority_does_not_affect_metadata_ranked_tiers():
 
 
 def test_strategies_override_replaces_the_per_tier_map():
-    """Passing `strategies` drops the built-in reasoning/low_cost mapping; tiers
+    """Passing `strategies` drops the built-in reasoning/low_cost mapping, tiers
     left out of the override fall back to the default strategy.
     """
     registry = {
@@ -161,3 +161,117 @@ def test_default_catalog_and_registry_agree():
     registry entry should break here, not in production.
     """
     validate_registry(DEFAULT_CATALOG, MODEL_REGISTRY)
+
+
+# validate_registry
+
+def test_validate_registry_rejects_model_missing_from_registry():
+    catalog = {"default": [Candidate(OPENAI, "ghost-model")]}
+
+    with pytest.raises(ValueError, match="ghost-model"):
+        validate_registry(catalog, MODEL_REGISTRY)
+
+
+def test_validate_registry_rejects_provider_mismatch():
+    """gpt-4o is registered under OpenAI, listing it under Anthropic would route
+    the request to a provider that cannot serve it.
+    """
+    catalog = {"default": [Candidate(ANTHROPIC, "gpt-4o")]}
+
+    with pytest.raises(ValueError, match="gpt-4o"):
+        validate_registry(catalog, MODEL_REGISTRY)
+
+
+def test_validate_registry_accepts_an_empty_catalog():
+    validate_registry({}, MODEL_REGISTRY)
+
+
+# Strategy ranking in isolation
+
+
+def test_priority_strategy_puts_unlisted_providers_last():
+    """A provider absent from the preference list sorts behind every listed one
+    instead of raising.
+    """
+    strategy = PriorityStrategy([ANTHROPIC])
+    candidates = [Candidate(OPENAI, "gpt-4o"), Candidate(ANTHROPIC, "claude-sonnet-5")]
+
+    assert [c.provider for c in strategy.rank(candidates)] == [ANTHROPIC, OPENAI]
+
+
+def test_metadata_strategy_puts_unregistered_models_last():
+    """Defensive: `validate_registry` should make this unreachable via
+    build_router, but ranking must not crash on a model it cannot score.
+    """
+    registry = {"known": ModelMetadata(OPENAI, 0.001, 0.001, reasoning_score=50, latency_score=50)}
+    candidates = [Candidate(ANTHROPIC, "unknown"), Candidate(OPENAI, "known")]
+
+    # highest-first strategy: unknown scores -inf
+    assert [c.model for c in ReasoningStrategy(registry).rank(candidates)] == [
+        "known",
+        "unknown",
+    ]
+    # lowest-first strategy: unknown scores +inf
+    assert [c.model for c in CostStrategy(registry).rank(candidates)] == [
+        "known",
+        "unknown",
+    ]
+
+
+def test_cost_strategy_sums_input_and_output_cost():
+    """Ranking on the total, not on input price alone: `cheap_in` has the lower
+    input cost but the higher combined cost.
+    """
+    registry = {
+        "cheap_in": ModelMetadata(OPENAI, 0.001, 0.100, reasoning_score=50, latency_score=50),
+        "cheap_total": ModelMetadata(ANTHROPIC, 0.002, 0.003, reasoning_score=50, latency_score=50),
+    }
+    candidates = [Candidate(OPENAI, "cheap_in"), Candidate(ANTHROPIC, "cheap_total")]
+
+    ranked = CostStrategy(registry).rank(candidates)
+
+    assert [c.model for c in ranked] == ["cheap_total", "cheap_in"]
+
+
+def test_ranking_is_stable_on_ties():
+    """Equal metrics keep catalog order, so configuration stays the tiebreaker."""
+    registry = {
+        "a": ModelMetadata(OPENAI, 0.001, 0.001, reasoning_score=50, latency_score=50),
+        "b": ModelMetadata(ANTHROPIC, 0.001, 0.001, reasoning_score=50, latency_score=50),
+    }
+    candidates = [Candidate(ANTHROPIC, "b"), Candidate(OPENAI, "a")]
+
+    assert [c.model for c in CostStrategy(registry).rank(candidates)] == ["b", "a"]
+    assert [c.model for c in ReasoningStrategy(registry).rank(candidates)] == ["b", "a"]
+
+
+def test_ranking_does_not_mutate_the_catalog_list():
+    """The catalog is process-wide and shared; ranking must return a new list."""
+    original = [Candidate(ANTHROPIC, "claude-sonnet-5"), Candidate(OPENAI, "gpt-4o")]
+    candidates = list(original)
+
+    ranked = PriorityStrategy(DEFAULT_PRIORITY).rank(candidates)
+
+    assert candidates == original
+    assert ranked is not candidates
+
+
+def test_single_candidate_tier_resolves_to_that_candidate():
+    registry = {"only": ModelMetadata(OPENAI, 0.001, 0.001, reasoning_score=50, latency_score=50)}
+    catalog = {"solo": [Candidate(OPENAI, "only")]}
+
+    router = build_router(catalog=catalog, registry=registry)
+
+    assert router.candidates_for("solo") == [Candidate(OPENAI, "only")]
+
+
+def test_routing_service_uses_default_strategy_for_unmapped_tiers():
+    """RoutingService directly, without build_router's wiring."""
+    catalog = {"anything": [Candidate(ANTHROPIC, "claude-sonnet-5"), Candidate(OPENAI, "gpt-4o")]}
+    service = RoutingService(
+        catalog=catalog,
+        strategies={},
+        default_strategy=PriorityStrategy(DEFAULT_PRIORITY),
+    )
+
+    assert [c.provider for c in service.candidates_for("anything")] == [OPENAI, ANTHROPIC]
