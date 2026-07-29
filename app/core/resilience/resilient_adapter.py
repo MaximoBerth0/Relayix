@@ -29,28 +29,29 @@ class ResilientAdapter(ProviderAdapter):
         self._timeout_s = timeout_s
 
     async def complete(self, request: ChatRequest) -> ChatResponse:
-        if not await self._breaker.allow():
+        allowed, generation = await self._breaker.allow()
+        if not allowed:
             raise CircuitOpen(f"circuit open for provider {self._provider.value}")
 
         try:
             async with asyncio.timeout(self._timeout_s):
                 response = await self._inner.complete(request)
-                
+
         except TimeoutError as exc:
             # Ambiguous, not safe to retry
             # blindly on another provider.
-            await self._breaker.record_failure()
+            await self._breaker.record_failure(generation)
             raise UpstreamAmbiguous(
                 f"{self._provider.value} timed out after {self._timeout_s}s"
             ) from exc
-        
+
         except Exception:
-            await self._breaker.record_failure()
+            await self._breaker.record_failure(generation)
             raise
 
         except BaseException:
-            await self._breaker.record_abort()
+            await self._breaker.record_abort(generation)
             raise
 
-        await self._breaker.record_success()
+        await self._breaker.record_success(generation)
         return response

@@ -24,20 +24,21 @@ class ResilientRateLimiter:
         self._breaker = breaker
 
     async def check(self, key: UUID, rpm: int) -> None:
-        if not await self._breaker.allow():
+        allowed, generation = await self._breaker.allow()
+        if not allowed:
             await self._fallback.check(key, rpm)
             return
 
         try:
             await self._primary.check(key, rpm)
         except RateLimitExceeded:
-            await self._breaker.record_success()
+            await self._breaker.record_success(generation)
             raise
         except RateLimiterUnavailable as exc:
-            await self._breaker.record_failure()
+            await self._breaker.record_failure(generation)
             logger.warning("redis rate limiter unavailable, using in-memory fallback", exc_info=exc)
             await self._fallback.check(key, rpm)
             return
 
         # redis allowed the request
-        await self._breaker.record_success()
+        await self._breaker.record_success(generation)

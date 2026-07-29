@@ -16,6 +16,10 @@ class CircuitBreaker:
     CLOSED    -> calls pass, trips OPEN after `fail_threshold` consecutive failures
     OPEN      -> calls rejected until `reset_timeout_s` elapses, then HALF_OPEN
     HALF_OPEN -> a single trial call is allowed; success closes, failure re-opens
+
+    Outcomes are tied to a generation. `allow()` hands back the generation the
+    call was admitted under, and `record_*` only applies an outcome whose
+    generation still matches.
     """
 
     def __init__(self, fail_threshold: int, reset_timeout_s: float) -> None:
@@ -25,49 +29,67 @@ class CircuitBreaker:
         self._failures = 0
         self._opened_at = 0.0
         self._trial_in_flight = False
+        self._generation = 0
         self._lock = asyncio.Lock()
 
     @property
     def state(self) -> CircuitState:
         return self._state
 
-    async def allow(self) -> bool:
+    async def allow(self) -> tuple[bool, int]:
+        """`(allowed, generation)`. An admitted caller must hand the generation
+        back to `record_success` / `record_failure` / `record_abort`.
+        """
         async with self._lock:
             if self._state == CircuitState.CLOSED:
-                return True
+                return True, self._generation
 
             if self._state == CircuitState.OPEN:
                 if time.monotonic() - self._opened_at >= self._reset_timeout_s:
-                    self._state = CircuitState.HALF_OPEN
+                    self._enter(CircuitState.HALF_OPEN)
                     self._trial_in_flight = True
-                    return True
-                return False
+                    return True, self._generation
+                return False, self._generation
 
             # HALF_OPEN: admit exactly one trial while it is outstanding.
             if not self._trial_in_flight:
                 self._trial_in_flight = True
-                return True
-            return False
+                return True, self._generation
+            return False, self._generation
 
-    async def record_success(self) -> None:
+    async def record_success(self, generation: int) -> None:
         async with self._lock:
+            if generation != self._generation:
+                return
             self._failures = 0
             self._trial_in_flight = False
-            self._state = CircuitState.CLOSED
+            if self._state is not CircuitState.CLOSED:
+                self._enter(CircuitState.CLOSED)
 
-    async def record_failure(self) -> None:
+    async def record_failure(self, generation: int) -> None:
         async with self._lock:
+            if generation != self._generation:
+                return
             self._failures += 1
             self._trial_in_flight = False
             if (
                 self._state == CircuitState.HALF_OPEN
                 or self._failures >= self._fail_threshold
             ):
-                self._state = CircuitState.OPEN
+                self._enter(CircuitState.OPEN)
                 self._opened_at = time.monotonic()
 
-    async def record_abort(self) -> None:
+    async def record_abort(self, generation: int) -> None:
         """release an in-flight trial without recording success or failure
         """
         async with self._lock:
+            if generation != self._generation:
+                return
             self._trial_in_flight = False
+
+    def _enter(self, state: CircuitState) -> None:
+        """move to `state` and retire the current generation, so outcomes from
+        calls admitted under it are ignored. Callers hold `_lock`.
+        """
+        self._state = state
+        self._generation += 1
