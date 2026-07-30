@@ -1,0 +1,87 @@
+# Local development stack: Postgres + Redis + the API, so nothing has to be
+# installed on the host. Run from the repo root:
+#   docker compose -f docker/docker-compose.yml up --build
+#   docker compose -f docker/docker-compose.yml exec api python -m scripts.seed_dev
+#
+# Credentials are hardcoded dev values on purpose. Provider API keys are the only
+# real secrets and they are read from the repo-root .env (optional).
+#
+# Ports 5432/6379 collide with docker-compose-test.yml, bring that stack down first.
+
+name: relayix
+
+services:
+  db:
+    image: postgres:16
+    container_name: relayix_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: relayix
+      POSTGRES_DB: relayix_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d relayix_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: relayix_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: relayix_api
+    # provider credentials (OPENAI_API_KEY / ANTHROPIC_API_KEY) and any local
+    # override live here
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      ENVIRONMENT: development
+      DEBUG: "true"
+      # service names resolve on the compose network
+      DATABASE_URL: postgresql+asyncpg://postgres:relayix@db:5432/relayix_db
+      # the postgres image serves plaintext only
+      DB_SSL: disable
+      REDIS_URL: redis://redis:6379/0
+      RUN_MIGRATIONS: "true"
+    ports:
+      - "8000:8000"
+    # source is mounted so --reload picks up edits without a rebuild
+    volumes:
+      - ../app:/app/app
+      - ../alembic:/app/alembic
+      - ../scripts:/app/scripts
+    command:
+      ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  pgdata:
+  redisdata:

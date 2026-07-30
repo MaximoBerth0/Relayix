@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     db_command_timeout_s: float = 30.0    # asyncpg client-side query timeout
     db_statement_timeout_ms: int = 30000  # server-side PostgreSQL statement_timeout (milliseconds)
 
+    # libpq-style TLS mode handed to asyncpg. Managed Postgres (RDS) terminates
+    # TLS, so "require" is the right default; a local Docker container has TLS
+    # off, so the dev compose overrides this with DB_SSL=disable.
+    db_ssl: str = "require"  # disable | allow | prefer | require | verify-ca | verify-full
+
     # provider credentials
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None

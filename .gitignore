@@ -9,9 +9,9 @@ __pycache__/
 venv/
 
 # Environment variables
-.env.example
 .env
 .env.test
+!.env.example
 
 # IDEs
 .vscode/
