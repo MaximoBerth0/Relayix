@@ -4,13 +4,19 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Awaitable, Callable, Protocol
+from collections.abc import Awaitable, Callable
+from typing import Protocol
 from uuid import UUID
 
+from app.core.exceptions import UpstreamAmbiguous
 from app.models.domain.chat import ChatRequest, ChatResponse
 from app.models.domain.enums import IdempotencyStatus, ProviderEnum
 from app.models.domain.idempotency import ReservationOutcome
-from app.services.exceptions import IdempotencyInProgress, IdempotencyKeyConflict
+from app.services.exceptions import (
+    IdempotencyInProgress,
+    IdempotencyKeyConflict,
+    IdempotencyOutcomeUnknown,
+)
 
 
 class IdempotencyStore(Protocol):
@@ -26,6 +32,12 @@ class IdempotencyStore(Protocol):
         self, api_key_id: UUID, key: str, fingerprint: str, response_body: dict
     ) -> None:
         """Store the final response and mark the record completed."""
+        ...
+
+    async def mark_ambiguous(
+        self, api_key_id: UUID, key: str, fingerprint: str, error: str
+    ) -> None:
+        """Park the record in a terminal ambiguous state (best effort)."""
         ...
 
     async def release(self, api_key_id: UUID, key: str) -> None:
@@ -57,9 +69,14 @@ class IdempotencyService:
             # we own the slot: run the real work exactly once, then persist it.
             try:
                 response = await operation()
+            except UpstreamAmbiguous as exc:
+                # the provider may already have executed and billed this request
+                await self._store.mark_ambiguous(
+                    api_key_id, key, fingerprint, error=str(exc)
+                )
+                raise
             except BaseException:
-                # failure (or cancellation): release the claim so a retry isn't
-                # blocked. The in-flight TTL is the backstop if this doesn't run.
+                # the request probably never executed (or we were cancelled)
                 await self._store.release(api_key_id, key)
                 raise
             await self._store.complete(
@@ -75,6 +92,9 @@ class IdempotencyService:
         if outcome.status == IdempotencyStatus.COMPLETED.value:
             return self._deserialize(outcome.response_body or {})
 
+        if outcome.status == IdempotencyStatus.AMBIGUOUS.value:
+            raise IdempotencyOutcomeUnknown(outcome.error)
+
         # still in flight: the original request hasn't finished yet.
         raise IdempotencyInProgress()
 
@@ -87,7 +107,6 @@ class IdempotencyService:
                 {"role": m.role, "content": m.content} for m in request.messages
             ],
             "max_tokens": request.max_tokens,
-            "temperature": request.temperature,
         }
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode()).hexdigest()

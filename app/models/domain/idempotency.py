@@ -16,3 +16,5 @@ class ReservationOutcome:
     status: str | None = None
     request_fingerprint: str | None = None
     response_body: dict[str, Any] | None = None
+    # only set on AMBIGUOUS records: why the original attempt's outcome is unknown.
+    error: str | None = None

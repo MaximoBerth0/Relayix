@@ -31,6 +31,24 @@ class IdempotencyInProgress(AppError):
         )
 
 
+class IdempotencyOutcomeUnknown(AppError):
+    """A previous attempt for this key ended with an unknown upstream outcome."""
+
+    def __init__(self, detail: str | None = None):
+        message = (
+            "A previous request with this Idempotency-Key may already have been "
+            "executed by the provider, so it will not be retried automatically. "
+            "Use a new Idempotency-Key to issue a new request."
+        )
+        if detail:
+            message = f"{message} Original failure: {detail}"
+        super().__init__(
+            message=message,
+            status_code=409,
+            error_code="IDEMPOTENCY_OUTCOME_UNKNOWN",
+        )
+
+
 class IdempotencyStoreUnavailable(AppError):
     """The idempotency backend (Redis) could not be reached"""
 

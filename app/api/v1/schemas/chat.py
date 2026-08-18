@@ -23,7 +23,6 @@ class ChatRequestSchema(BaseModel):
     model: str = Field(min_length=1)
     messages: list[MessageSchema] = Field(min_length=1)
     max_tokens: int | None = Field(default=None, gt=0)
-    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     failover_policy: FailoverPolicy = Field(default=FailoverPolicy.AT_MOST_ONCE)
 
     def to_domain(self) -> ChatRequest:
@@ -31,7 +30,6 @@ class ChatRequestSchema(BaseModel):
             model=self.model,
             messages=[message.to_domain() for message in self.messages],
             max_tokens=self.max_tokens,
-            temperature=self.temperature,
             failover_policy=self.failover_policy,
         )
 
@@ -46,7 +44,7 @@ class ChatResponseSchema(BaseModel):
     request_id: str
 
     @classmethod
-    def from_domain(cls, response: ChatResponse) -> "ChatResponseSchema":
+    def from_domain(cls, response: ChatResponse) -> ChatResponseSchema:
         return cls(
             provider=response.provider,
             model=response.model,

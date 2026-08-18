@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+
 from app.models.domain.enums import FailoverPolicy, ProviderEnum
 
 
@@ -13,7 +14,6 @@ class ChatRequest:
     model: str
     messages: list[Message]
     max_tokens: int | None = None
-    temperature: float | None = None
     failover_policy: FailoverPolicy = FailoverPolicy.AT_MOST_ONCE
 
 

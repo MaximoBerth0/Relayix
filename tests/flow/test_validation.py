@@ -59,16 +59,6 @@ def _locations(response) -> list[tuple]:
             id="max-tokens-not-positive",
         ),
         pytest.param(
-            {"model": "default", "messages": VALID_MESSAGES, "temperature": 2.5},
-            ("body", "temperature"),
-            id="temperature-above-range",
-        ),
-        pytest.param(
-            {"model": "default", "messages": VALID_MESSAGES, "temperature": -0.1},
-            ("body", "temperature"),
-            id="temperature-below-range",
-        ),
-        pytest.param(
             {"model": "default", "messages": VALID_MESSAGES, "failover_policy": "always"},
             ("body", "failover_policy"),
             id="failover-policy-unknown",
@@ -96,7 +86,6 @@ async def test_valid_boundary_values_are_accepted(client, stub_openai):
             "model": "default",
             "messages": VALID_MESSAGES,
             "max_tokens": 1,
-            "temperature": 0.0,
             "failover_policy": "at_least_once",
         },
     )

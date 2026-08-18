@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from uuid import UUID
 
 from redis.asyncio import Redis
@@ -11,6 +12,8 @@ from redis.exceptions import RedisError
 from app.models.domain.enums import IdempotencyStatus
 from app.models.domain.idempotency import ReservationOutcome
 from app.services.exceptions import IdempotencyStoreUnavailable
+
+logger = logging.getLogger(__name__)
 
 # how many times to re-attempt the claim if the record vanishes (TTL expiry)
 # between our SET NX and the follow-up GET
@@ -69,6 +72,8 @@ class RedisIdempotencyStore:
                     status=existing["status"],
                     request_fingerprint=existing["fingerprint"],
                     response_body=existing["response"],
+                    # .get: records written before AMBIGUOUS existed have no key.
+                    error=existing.get("error"),
                 )
         except (RedisError, OSError) as exc:
             raise IdempotencyStoreUnavailable() from exc
@@ -94,6 +99,36 @@ class RedisIdempotencyStore:
             )
         except (RedisError, OSError) as exc:
             raise IdempotencyStoreUnavailable() from exc
+
+    async def mark_ambiguous(
+        self, api_key_id: UUID, key: str, fingerprint: str, error: str
+    ) -> None:
+        """Park the record so a retry is answered instead of re-executed.
+
+        Best effort: a store failure here must not replace the upstream error the
+        caller is already raising. If the write is lost the record falls back to
+        expiring on the in-flight TTL, which is the pre-existing behaviour.
+        """
+        record = json.dumps(
+            {
+                "status": IdempotencyStatus.AMBIGUOUS.value,
+                "fingerprint": fingerprint,
+                "response": None,
+                "error": error,
+            }
+        )
+        try:
+            # terminal state, so it takes the longer retention TTL: it has to
+            # outlive the in-flight window to still be there when the client retries.
+            await self._client.set(
+                self._key(api_key_id, key), record, ex=self._completed_ttl_s
+            )
+        except (RedisError, OSError):
+            logger.exception(
+                "could not mark idempotency record ambiguous, a retry of this "
+                "key may execute a second time",
+                extra={"api_key_id": str(api_key_id)},
+            )
 
     async def release(self, api_key_id: UUID, key: str) -> None:
         try:

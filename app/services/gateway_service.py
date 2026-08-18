@@ -2,13 +2,13 @@ import logging
 from dataclasses import replace
 from uuid import UUID
 
+from app.core.accounting.usage_recorder import UsageRecorder
 from app.core.adapters.registry import AdapterRegistry
 from app.core.exceptions import (
     AdapterNotRegistered,
     UpstreamAmbiguous,
     UpstreamUnavailable,
 )
-from app.core.accounting.usage_recorder import UsageRecorder
 from app.core.routing.router import RoutingService
 from app.infra.global_exceptions import ProviderNotAvailable
 from app.models.domain.chat import ChatRequest, ChatResponse
@@ -33,6 +33,8 @@ class GatewayService:
         candidates = self._router.candidates_for(request.model)
 
         last_error: Exception | None = None
+
+        ambiguous_error: UpstreamAmbiguous | None = None
         for candidate in candidates:
             try:
                 adapter = self._registry.get(candidate.provider)
@@ -68,6 +70,7 @@ class GatewayService:
             except UpstreamAmbiguous as exc:
                 # the request may already have run and billed. nobody knows
                 last_error = exc
+                ambiguous_error = exc
                 if request.failover_policy is FailoverPolicy.AT_LEAST_ONCE:
                     logger.warning(
                         "candidate outcome unknown, failing over (at-least-once)",
@@ -97,4 +100,13 @@ class GatewayService:
             return response
 
         # Every candidate was either unconfigured or failed.
+        logger.error(
+            "no candidate served the request",
+            extra={"tier": request.model, "candidates": len(candidates)},
+            exc_info=last_error,
+        )
+
+        if ambiguous_error is not None:
+            raise ambiguous_error
+
         raise ProviderNotAvailable() from last_error

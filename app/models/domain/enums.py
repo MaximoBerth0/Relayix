@@ -1,5 +1,6 @@
 from enum import Enum
 
+
 # used by pricing entity and api_key db model
 class ProviderEnum(str, Enum):
     ANTHROPIC = "anthropic"
@@ -26,3 +27,4 @@ class IdempotencyStatus(str, Enum):
     """Lifecycle of an idempotency record in the store."""
     IN_PROGRESS = "in_progress"  # a request owns the key and is still running
     COMPLETED = "completed"      # the response is stored and replayable
+    AMBIGUOUS = "ambiguous"      # may have executed upstream, never auto-retried

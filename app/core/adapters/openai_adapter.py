@@ -11,7 +11,7 @@ from app.core.exceptions import UpstreamAmbiguous, UpstreamUnavailable
 from app.models.domain.chat import ChatRequest, ChatResponse
 from app.models.domain.enums import ProviderEnum
 
-# max_tokens is not required but is used to optimize costs
+# not required by the API but sent to optimize costs. 
 _DEFAULT_MAX_TOKENS = 4096
 
 # translate OpenAI's finish_reason vocabulary into relayix's normalized set
@@ -38,7 +38,7 @@ class OpenAIAdapter(ProviderAdapter):
         try:
             response = await self._client.chat.completions.create(
                 model=request.model,
-                max_tokens=request.max_tokens or _DEFAULT_MAX_TOKENS,
+                max_completion_tokens=request.max_tokens or _DEFAULT_MAX_TOKENS,
                 messages=messages,    # role system/assistant/user with content here
             )
 
