@@ -74,9 +74,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # readiness, not liveness: this should go red when Postgres or Redis is
+    # unreachable, which /health (deliberately dependency-free) never does.
     healthcheck:
       test:
-        ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+        ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')\""]
       interval: 10s
       timeout: 5s
       retries: 5

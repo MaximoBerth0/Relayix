@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.api.v1 import chat, usage
+from app.api.v1 import chat, health, usage
 from app.core.accounting.pricing import build_pricing_table
 from app.core.adapters.registry import build_registry
 from app.core.exceptions import RateLimitExceeded
@@ -59,6 +59,7 @@ app = FastAPI(title="Relayix", lifespan=lifespan)
 # tag every request with a correlation id (X-Request-ID) for the logs
 app.add_middleware(RequestIdMiddleware)
 
+app.include_router(health.router)
 app.include_router(chat.router)
 app.include_router(usage.router)
 
@@ -77,8 +78,3 @@ async def handle_rate_limited(request: Request, exc: RateLimitExceeded) -> JSONR
         content=exc.to_dict(),
         headers={"Retry-After": str(math.ceil(exc.retry_after_s))},
     )
-
-
-@app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}

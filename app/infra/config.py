@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     # how long to wait on an upstream provider before giving up (seconds).
     provider_timeout_s: float = 40.0
 
+    # deadline for a single readiness dependency check. Deliberately much shorter
+    # than the db/redis timeouts above: a probe must answer faster than the
+    # interval an orchestrator polls it on.
+    health_check_timeout_s: float = 2.0
+
     # Fallback limit for keys that don't specify their own rate_limit_rpm
     default_rate_limit_rpm: int = 60
 

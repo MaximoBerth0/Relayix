@@ -12,13 +12,6 @@ router = APIRouter(
     tags=["usage"],
 )
 
-""" things i need to complete
-- read methods in repo 
-- get_usage_repo dependency
-- the schemas
-- register the router 
-"""
-
 @router.get(
     "",
     response_model=UsageSummarySchema,

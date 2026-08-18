@@ -15,3 +15,13 @@ async def test_client_serves_health(client):
     response = await client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+async def test_client_serves_readiness(client):
+    """with both backing services up, every dependency check reports ok"""
+    response = await client.get("/health/ready")
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ready",
+        "checks": {"postgres": "ok", "redis": "ok"},
+    }
