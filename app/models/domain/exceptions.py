@@ -84,3 +84,11 @@ class InvalidTokenQuota(DomainError):
             status_code=400,
             error_code="INVALID_TOKEN_QUOTA",
         )
+
+class ApiKeyNotFound(DomainError):
+    def __init__(self, message: str = "API key not found"):
+        super().__init__(
+            message=message,
+            status_code=404,
+            error_code="API_KEY_NOT_FOUND",
+        )

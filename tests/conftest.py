@@ -15,6 +15,7 @@ os.environ["REDIS_URL"] = "redis://localhost:6379/0"
 os.environ["OPENAI_API_KEY"] = "test-openai-key"
 os.environ["ANTHROPIC_API_KEY"] = "test-anthropic-key"
 os.environ["DEFAULT_RATE_LIMIT_RPM"] = "60"
+os.environ["ADMIN_API_TOKEN"] = "relayix-test-admin-token"
 
 # clear settings cache so test env vars take effect
 from app.infra.config import get_settings

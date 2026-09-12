@@ -16,6 +16,10 @@ from app.models.domain.enums import ProviderEnum
 API_TOKEN = "relayix-test-token"
 AUTH_HEADERS = {"Authorization": f"Bearer {API_TOKEN}"}
 
+# admin master token, set on settings.admin_api_token by conftest's env block.
+ADMIN_TOKEN = "relayix-test-admin-token"
+ADMIN_AUTH_HEADERS = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
+
 
 def make_api_key(token: str = API_TOKEN, *, name: str = "test-key", is_active: bool = True) -> Api_Key:
     """An API key row whose bearer token is `token`."""

@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     # off, so the dev compose overrides this with DB_SSL=disable.
     db_ssl: str = "require"  # disable | allow | prefer | require | verify-ca | verify-full
 
+    # bearer token gating the api-key management endpoints (create/list/revoke)
+    admin_api_token: str
+
     # provider credentials
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None

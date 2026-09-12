@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
+from app.models.domain.usage_by_model import UsageByModel
 from app.models.domain.usage_record import UsageRecord
 from app.models.domain.usage_summary import UsageSummary
 
@@ -29,6 +30,15 @@ class UsageRepository(Protocol):
         limit: int = 50,
         offset: int = 0,
     ) -> list[UsageRecord]:
+        ...
+
+    async def usage_by_model(
+        self,
+        api_key_id: UUID,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[UsageByModel]:
         ...
 
 
@@ -68,4 +78,18 @@ class UsageService:
             until=until,
             limit=limit,
             offset=offset,
+        )
+
+    async def usage_by_model(
+        self,
+        api_key_id: UUID,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[UsageByModel]:
+        """aggregate token and cost totals for one api key, grouped by provider/model."""
+        return await self._repository.usage_by_model(
+            api_key_id,
+            since=since,
+            until=until,
         )

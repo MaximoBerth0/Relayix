@@ -4,7 +4,7 @@
 COMPOSE      := docker compose -f docker/docker-compose.yml
 COMPOSE_TEST := docker compose -f docker/docker-compose-test.yml
 
-.PHONY: up down logs sh seed reset backing-up test-up test-down test migrate revision current heads
+.PHONY: up down logs sh reset backing-up test-up test-down test migrate revision current heads
 
 ## full stack (db + redis + api) 
 
@@ -23,9 +23,6 @@ logs:          ## Tail the api logs
 
 sh:            ## Shell inside the api container (skips migrations)
 	$(COMPOSE) run --rm -e RUN_MIGRATIONS=false api bash
-
-seed:          ## Insert the dev api key + pricing rows
-	$(COMPOSE) exec api python -m scripts.seed_dev
 
 backing-up:    ## Start only Postgres and Redis (run the app on the host yourself)
 	$(COMPOSE) up -d db redis

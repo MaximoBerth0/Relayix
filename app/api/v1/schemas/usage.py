@@ -12,6 +12,7 @@ from app.models.domain.enums import ProviderEnum
 from app.models.domain.usage_record import UsageRecord
 
 if TYPE_CHECKING:
+    from app.models.domain.usage_by_model import UsageByModel
     from app.models.domain.usage_summary import UsageSummary
 
 
@@ -56,4 +57,24 @@ class UsageSummarySchema(BaseModel):
             total_cost=summary.total_cost,
             since=summary.since,
             until=summary.until,
+        )
+
+
+class UsageByModelSchema(BaseModel):
+    provider: ProviderEnum
+    model: str
+    total_requests: int
+    total_tokens_in: int
+    total_tokens_out: int
+    total_cost: Decimal
+
+    @classmethod
+    def from_domain(cls, entry: "UsageByModel") -> "UsageByModelSchema":
+        return cls(
+            provider=entry.provider,
+            model=entry.model,
+            total_requests=entry.total_requests,
+            total_tokens_in=entry.total_tokens_in,
+            total_tokens_out=entry.total_tokens_out,
+            total_cost=entry.total_cost,
         )

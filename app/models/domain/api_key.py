@@ -1,3 +1,4 @@
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from app.models.domain.exceptions import (
@@ -9,10 +10,12 @@ from app.models.domain.exceptions import (
 
 @dataclass(frozen=True)
 class ApiKey:
+    id: uuid.UUID
     key_hash: str
     name: str
     rate_limit_rpm: int | None
     monthly_token_quota: int | None
+    is_active: bool
     created_at: datetime
 
     @classmethod
@@ -37,9 +40,11 @@ class ApiKey:
             raise InvalidTokenQuota()
 
         return cls(
+            id=uuid.uuid7(),
             key_hash=key_hash,
             name=name,
             rate_limit_rpm=rate_limit_rpm,
             monthly_token_quota=monthly_token_quota,
+            is_active=True,
             created_at=datetime.now(timezone.utc),
         )

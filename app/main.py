@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.api.v1 import chat, health, usage
+from app.api.v1 import api_keys, chat, health, usage
 from app.core.accounting.pricing import build_pricing_table
 from app.core.adapters.registry import build_registry
 from app.core.exceptions import RateLimitExceeded
@@ -62,6 +62,7 @@ app.add_middleware(RequestIdMiddleware)
 app.include_router(health.router)
 app.include_router(chat.router)
 app.include_router(usage.router)
+app.include_router(api_keys.router)
 
 
 @app.exception_handler(AppError)

@@ -4,7 +4,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, status
 
 from app.api.deps import get_current_api_key_id, get_usage_service
-from app.api.v1.schemas.usage import UsageRecordSchema, UsageSummarySchema
+from app.api.v1.schemas.usage import (
+    UsageByModelSchema,
+    UsageRecordSchema,
+    UsageSummarySchema,
+)
 from app.services.usage_service import UsageService
 
 router = APIRouter(
@@ -50,3 +54,19 @@ async def list_usage_records(
         offset=offset,
     )
     return [UsageRecordSchema.from_domain(record) for record in records]
+
+
+@router.get(
+    "/by-model",
+    response_model=list[UsageByModelSchema],
+    status_code=status.HTTP_200_OK,
+)
+async def get_usage_by_model(
+    since: datetime | None = Query(default=None),
+    until: datetime | None = Query(default=None),
+    service: UsageService = Depends(get_usage_service),
+    api_key_id: UUID = Depends(get_current_api_key_id),
+) -> list[UsageByModelSchema]:
+    """Token and cost totals for the caller's api key, grouped by provider/model."""
+    entries = await service.usage_by_model(api_key_id, since=since, until=until)
+    return [UsageByModelSchema.from_domain(entry) for entry in entries]

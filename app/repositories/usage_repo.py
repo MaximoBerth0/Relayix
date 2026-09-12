@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db.usage_record import Usage_Record
 from app.models.domain.enums import ProviderEnum
+from app.models.domain.usage_by_model import UsageByModel
 from app.models.domain.usage_record import UsageRecord
 from app.models.domain.usage_summary import UsageSummary
 
@@ -79,6 +80,39 @@ class UsageRepo:
 
         rows = (await self._session.scalars(stmt)).all()
         return [self._to_domain(row) for row in rows]
+
+    async def usage_by_model(
+        self,
+        api_key_id: UUID,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[UsageByModel]:
+        """aggregate token and cost totals for one api key, grouped by provider/model."""
+        stmt = select(
+            Usage_Record.provider,
+            Usage_Record.model,
+            func.count(Usage_Record.id),
+            func.coalesce(func.sum(Usage_Record.token_in), 0),
+            func.coalesce(func.sum(Usage_Record.token_out), 0),
+            func.coalesce(func.sum(Usage_Record.cost), 0),
+        ).where(Usage_Record.api_key_id == api_key_id)
+        stmt = self._apply_window(stmt, since=since, until=until)
+        stmt = stmt.group_by(Usage_Record.provider, Usage_Record.model)
+        stmt = stmt.order_by(func.coalesce(func.sum(Usage_Record.cost), 0).desc())
+
+        rows = (await self._session.execute(stmt)).all()
+        return [
+            UsageByModel(
+                provider=ProviderEnum(provider),
+                model=model,
+                total_requests=int(total_requests),
+                total_tokens_in=int(total_tokens_in),
+                total_tokens_out=int(total_tokens_out),
+                total_cost=Decimal(total_cost),
+            )
+            for provider, model, total_requests, total_tokens_in, total_tokens_out, total_cost in rows
+        ]
 
     @staticmethod
     def _apply_window(stmt, *, since: datetime | None, until: datetime | None):

@@ -1,7 +1,6 @@
 # Local development stack: Postgres + Redis + the API, so nothing has to be
 # installed on the host. Run from the repo root:
 #   docker compose -f docker/docker-compose.yml up --build
-#   docker compose -f docker/docker-compose.yml exec api python -m scripts.seed_dev
 #
 # Credentials are hardcoded dev values on purpose. Provider API keys are the only
 # real secrets and they are read from the repo-root .env (optional).
@@ -60,6 +59,7 @@ services:
       DB_SSL: disable
       REDIS_URL: redis://redis:6379/0
       RUN_MIGRATIONS: "true"
+      ADMIN_API_TOKEN: relayix-dev-admin-token
     ports:
       - "8000:8000"
     # source is mounted so --reload picks up edits without a rebuild

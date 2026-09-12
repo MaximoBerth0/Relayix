@@ -1,6 +1,7 @@
 """FastAPI dependency providers
 """
 
+import secrets
 from uuid import UUID
 
 from fastapi import Depends, Header, Request
@@ -18,7 +19,9 @@ from app.infra.global_exceptions import Unauthorized
 from app.infra.idempotency.redis_store import RedisIdempotencyStore
 from app.infra.security.crypto import hash_api_key
 from app.models.db.api_key import Api_Key
+from app.repositories.api_key_repo import ApiKeyRepo
 from app.repositories.usage_repo import UsageRepo
+from app.services.api_key_service import ApiKeyService
 from app.services.gateway_service import GatewayService
 from app.services.idempotency_service import IdempotencyService
 from app.services.usage_service import UsageService
@@ -105,6 +108,24 @@ async def get_current_api_key_id(
 ) -> UUID:
     """the authenticated caller's api_key id"""
     return api_key.id
+
+
+async def get_current_admin(authorization: str | None = Header(default=None)) -> None:
+    """authenticate the caller against the admin master token, gating the
+    api-key management endpoints."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise Unauthorized()
+
+    token = authorization.removeprefix("Bearer ").strip()
+    if not token or not secrets.compare_digest(token, settings.admin_api_token):
+        raise Unauthorized()
+
+
+async def get_api_key_service(
+    session: AsyncSession = Depends(get_session),
+) -> ApiKeyService:
+    """construct a request-scoped ApiKeyService over the current DB session"""
+    return ApiKeyService(ApiKeyRepo(session))
 
 
 async def get_rate_limiter(request: Request) -> RateLimiter:
