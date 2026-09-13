@@ -8,23 +8,44 @@ Relayix is a FastAPI-native gateway that sits in front of your LLM providers. In
 
 The goal is to centralize the concerns that would otherwise be duplicated in every app that talks to an LLM: which provider to use, what to do when one goes down, how many requests a caller can make, and what everything actually costs. By moving these concerns behind a single gateway, applications stay thin and consistent, and operational policy lives in one place.
 
-Full technical documentation — architecture, request flow, storage design, and the circuit breaker state machine — lives separately from this README.
+Full technical documentation — architecture, request flow, and per-module deep dives —
+lives in [docs/](docs/README.md), start there.
 
-![Flow](docs/relayix_request_path.png)
+```mermaid
+flowchart LR
+    A[Main backend] -- "POST /v1/chat/completions" --> B[Relayix Gateway]
+    B -- response --> A
+    B -- request --> G[AI Provider]
+    G -- response --> B
+    B <--> R[("Redis<br/>rate limit + idempotency")]
+    B --> D[("Postgres<br/>api_keys + usage_records")]
+```
 
 ## Features
 
 - **Multi-provider routing** — requests are routed across configured providers based on availability and strategy.
 - **Circuit-breaker failover** — unhealthy providers are automatically taken out of rotation and periodically re-tested, so an outage on one provider doesn't fail requests for your users.
 - **Token-based cost accounting** — token usage and cost are recorded per request, queryable after the fact.
-- **Rate limiting** — requests are throttled per API key before they reach a provider.
+- **Rate limiting** — requests are throttled per API key before they reach a provider, backed by Redis with an in-memory fallback if Redis is unreachable.
+- **Idempotency** — send an `Idempotency-Key` header and a retried request replays the stored response instead of hitting a provider again.
+- **Streaming** — `stream: true` returns the completion as Server-Sent Events.
 
 ## Tech Stack
 
 - **Python** / **FastAPI** — async HTTP delivery layer.
-- **SQLAlchemy** — ORM and persistence.
+- **SQLAlchemy** / **asyncpg** — ORM and persistence.
 - **Alembic** — database schema migrations.
+- **Redis** — rate limiting and idempotency.
 - **Docker** — containerized build and deployment.
+
+## Running locally
+
+```bash
+cp .env.example .env       # fill in provider keys and ADMIN_API_TOKEN
+make up                    # api + Postgres + Redis, with migrations applied
+```
+
+See `Makefile` for the rest (`make test`, `make migrate`, `make revision`, ...).
 
 ## Project Structure
 
@@ -54,10 +75,15 @@ relayix/
 │   │
 │   ├── infra/             # framework glue: config, base exceptions
 │   │   ├── security/      # crypto / hashing helpers
-│   │   └── database/      # engine, session and ORM base
+│   │   ├── database/      # engine, session and ORM base
+│   │   ├── ratelimit/     # Redis client and Redis-backed limiter
+│   │   └── idempotency/   # Redis-backed idempotency store
 │   │
 │   └── observability/     # logging setup and request-id middleware
 │
+├── alembic/               # migrations
+├── docker/                # Dockerfile + compose stacks (dev and test)
+├── docs/                  # architecture docs, start at docs/README.md
 ├── tests/                 # unit and integration suites
 ├── pyproject.toml
 └── README.md

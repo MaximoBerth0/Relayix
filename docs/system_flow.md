@@ -64,6 +64,6 @@ flowchart TB
 ```
 
 **Why the two dotted edges differ:** an *unavailable* provider provably never ran the
-request, so failing over is always safe. A *timeout* is ambiguous — the request may have
-executed and billed — so failing over is gated on the caller's `failover_policy`, which
+request, so failing over is always safe. A *timeout* is ambiguous the request may have
+executed and billed so failing over is gated on the caller's `failover_policy`, which
 defaults to `at_most_once` (no double-spend).
