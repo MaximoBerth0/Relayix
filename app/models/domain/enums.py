@@ -6,8 +6,8 @@ class ProviderEnum(str, Enum):
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
 
-# used by usage_record entity
-VALID_FINISH_REASONS = {"stop", "length", "tool_use", "content_filter"}
+# used by usage_record entity. ("error" covers a stream cut short mid-generation)
+VALID_FINISH_REASONS = {"stop", "length", "tool_use", "content_filter", "error"}
 
 
 class FailoverPolicy(str, Enum):

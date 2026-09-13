@@ -1,4 +1,11 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from app.infra.global_exceptions import AppError
+
+if TYPE_CHECKING:
+    from app.models.domain.chat import ChatResponse
 
 
 class CoreError(AppError):
@@ -72,6 +79,19 @@ class UpstreamAmbiguous(UpstreamError):
 
     def __init__(self, message: str = "Upstream provider outcome unknown"):
         super().__init__(message=message, error_code="UPSTREAM_AMBIGUOUS")
+
+
+class UpstreamStreamInterrupted(UpstreamAmbiguous):
+    """A stream broke after content had already reached the caller.
+    """
+
+    def __init__(
+        self,
+        message: str = "Upstream stream interrupted",
+        partial: ChatResponse | None = None,
+    ):
+        super().__init__(message=message)
+        self.partial = partial
 
 
 class CircuitOpen(UpstreamUnavailable):

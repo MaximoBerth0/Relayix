@@ -24,6 +24,7 @@ class ChatRequestSchema(BaseModel):
     messages: list[MessageSchema] = Field(min_length=1)
     max_tokens: int | None = Field(default=None, gt=0)
     failover_policy: FailoverPolicy = Field(default=FailoverPolicy.AT_MOST_ONCE)
+    stream: bool = Field(default=False)
 
     def to_domain(self) -> ChatRequest:
         return ChatRequest(

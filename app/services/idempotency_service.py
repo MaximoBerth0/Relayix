@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Protocol
 from uuid import UUID
 
 from app.core.exceptions import UpstreamAmbiguous
-from app.models.domain.chat import ChatRequest, ChatResponse
+from app.models.domain.chat import (
+    ChatRequest,
+    ChatResponse,
+    ChatStreamDelta,
+    ChatStreamEvent,
+)
 from app.models.domain.enums import IdempotencyStatus, ProviderEnum
 from app.models.domain.idempotency import ReservationOutcome
 from app.services.exceptions import (
@@ -46,6 +51,7 @@ class IdempotencyStore(Protocol):
 
 
 Operation = Callable[[], Awaitable[ChatResponse]]
+StreamOperation = Callable[[], Awaitable[AsyncIterator[ChatStreamEvent]]]
 
 
 class IdempotencyService:
@@ -97,6 +103,79 @@ class IdempotencyService:
 
         # still in flight: the original request hasn't finished yet.
         raise IdempotencyInProgress()
+
+    async def execute_stream(
+        self,
+        *,
+        key: str,
+        api_key_id: UUID,
+        request: ChatRequest,
+        operation: StreamOperation,
+    ) -> AsyncIterator[ChatStreamEvent]:
+        """Streaming counterpart to `execute`.
+
+        `operation` is expected to behave like `GatewayService.stream`: it
+        does its own failover internally and only returns once a candidate has
+        actually committed to producing output (or raises before anything is
+        sent anywhere).
+        """
+        fingerprint = self._fingerprint(request)
+        outcome = await self._store.reserve(api_key_id, key, fingerprint)
+
+        if outcome.acquired:
+            try:
+                primed = await operation()
+            except UpstreamAmbiguous as exc:
+                await self._store.mark_ambiguous(
+                    api_key_id, key, fingerprint, error=str(exc)
+                )
+                raise
+            except BaseException:
+                await self._store.release(api_key_id, key)
+                raise
+            return self._settle(primed, key, api_key_id, fingerprint)
+
+        if outcome.request_fingerprint != fingerprint:
+            raise IdempotencyKeyConflict()
+
+        if outcome.status == IdempotencyStatus.COMPLETED.value:
+            return self._replay_stream(outcome.response_body or {})
+
+        if outcome.status == IdempotencyStatus.AMBIGUOUS.value:
+            raise IdempotencyOutcomeUnknown(outcome.error)
+
+        raise IdempotencyInProgress()
+
+    async def _settle(
+        self,
+        primed: AsyncIterator[ChatStreamEvent],
+        key: str,
+        api_key_id: UUID,
+        fingerprint: str,
+    ) -> AsyncIterator[ChatStreamEvent]:
+        try:
+            async for event in primed:
+                yield event
+                if isinstance(event, ChatResponse):
+                    await self._store.complete(
+                        api_key_id, key, fingerprint, self._serialize(event)
+                    )
+        except BaseException as exc:
+            # a break here (provider error, client
+            # disconnect, cancellation) is never safe to release for retry.
+            await self._store.mark_ambiguous(
+                api_key_id, key, fingerprint, error=str(exc)
+            )
+            raise
+        finally:
+            await primed.aclose()
+
+    async def _replay_stream(self, body: dict) -> AsyncIterator[ChatStreamEvent]:
+        """Re-serve a completed request's stored response as a one-shot stream."""
+        response = self._deserialize(body)
+        if response.content:
+            yield ChatStreamDelta(content=response.content)
+        yield response
 
     @staticmethod
     def _fingerprint(request: ChatRequest) -> str:

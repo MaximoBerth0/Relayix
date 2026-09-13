@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 
 from app.core.adapters.base import ProviderAdapter
-from app.core.exceptions import CircuitOpen, UpstreamAmbiguous
+from app.core.exceptions import (
+    CircuitOpen,
+    UpstreamAmbiguous,
+    UpstreamStreamInterrupted,
+)
 from app.core.resilience.circuit_breaker import CircuitBreaker
+from app.models.domain.chat import ChatResponse
 
 if TYPE_CHECKING:
-    from app.models.domain.chat import ChatRequest, ChatResponse
+    from app.models.domain.chat import ChatRequest, ChatStreamEvent
     from app.models.domain.enums import ProviderEnum
 
 
@@ -55,3 +61,47 @@ class ResilientAdapter(ProviderAdapter):
 
         await self._breaker.record_success(generation)
         return response
+
+    async def stream(self, request: ChatRequest) -> AsyncIterator[ChatStreamEvent]:
+        allowed, generation = await self._breaker.allow()
+        if not allowed:
+            raise CircuitOpen(f"circuit open for provider {self._provider.value}")
+
+        inner_iter = self._inner.stream(request)
+        emitted_any = False
+        try:
+            while True:
+                try:
+                    async with asyncio.timeout(self._timeout_s):
+                        event = await inner_iter.__anext__()
+                except StopAsyncIteration:
+                    break
+                except TimeoutError as exc:
+                    # A stall: no event (first token or otherwise) within the
+                    # window. Ambiguous if nothing reached the caller yet;
+                    # otherwise the caller already has partial content and
+                    # can't be failed over. Recorded once below, by the outer
+                    # `except Exception` this re-raise falls into.
+                    if emitted_any:
+                        raise UpstreamStreamInterrupted(
+                            f"{self._provider.value} stalled mid-stream after "
+                            f"{self._timeout_s}s"
+                        ) from exc
+                    raise UpstreamAmbiguous(
+                        f"{self._provider.value} timed out after {self._timeout_s}s"
+                    ) from exc
+
+                if isinstance(event, ChatResponse):
+                    yield event
+                    await self._breaker.record_success(generation)
+                    return
+                emitted_any = True
+                yield event
+        except Exception:
+            await self._breaker.record_failure(generation)
+            raise
+        except BaseException:
+            await self._breaker.record_abort(generation)
+            raise
+        finally:
+            await inner_iter.aclose()

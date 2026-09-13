@@ -26,3 +26,16 @@ class ChatResponse:
     tokens_out: int
     finish_reason: str
     request_id: str
+
+
+@dataclass(frozen=True)
+class ChatStreamDelta:
+    """One incremental piece of assistant text."""
+    content: str
+
+
+# An adapter's stream() yields zero or more deltas, then exactly one ChatResponse
+# carrying the full accumulated content and final usage — the same terminal shape
+# complete() returns, so callers that only care about the end result treat both
+# code paths identically.
+ChatStreamEvent = ChatStreamDelta | ChatResponse
