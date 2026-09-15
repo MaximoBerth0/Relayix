@@ -6,10 +6,12 @@ insert so a test can also build a row and persist it itself.
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from uuid import UUID, uuid4
 
 from app.infra.security.crypto import hash_api_key
 from app.models.db.api_key import Api_Key
 from app.models.db.pricing import Pricing
+from app.models.db.usage_record import Usage_Record
 from app.models.domain.enums import ProviderEnum
 
 # plaintext bearer token whose sha256 is seeded into the api_key table.
@@ -50,3 +52,31 @@ def make_pricing_rows() -> list[Pricing]:
             effective_from=datetime(2020, 1, 1, tzinfo=UTC),
         ),
     ]
+
+
+def make_usage_record(
+    *,
+    api_key_id: UUID,
+    provider: ProviderEnum = ProviderEnum.OPENAI,
+    model: str = "gpt-4o",
+    tokens_in: int = 100,
+    tokens_out: int = 50,
+    cost: Decimal = Decimal("0.01"),
+    finish_reason: str = "stop",
+    request_id: str | None = None,
+    created_at: datetime | None = None,
+) -> Usage_Record:
+    """A usage_record row, for tests that seed usage history directly instead
+    of going through UsageRecorder.
+    """
+    return Usage_Record(
+        api_key_id=api_key_id,
+        provider=provider.value,
+        model=model,
+        token_in=tokens_in,
+        token_out=tokens_out,
+        cost=cost,
+        finish_reason=finish_reason,
+        request_id=request_id or f"req-{uuid4().hex[:8]}",
+        created_at=created_at or datetime.now(UTC),
+    )

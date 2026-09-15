@@ -134,7 +134,7 @@ async def client(db_session, redis_client):
         ),
     )
 
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
 

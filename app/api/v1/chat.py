@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import AsyncIterator
 from uuid import UUID
 
@@ -21,6 +22,8 @@ router = APIRouter(
     prefix="/v1/chat",
     tags=["completions"],
 )
+
+logger = logging.getLogger(__name__)
 
 
 @router.post(
@@ -78,3 +81,10 @@ async def _encode_sse(events: AsyncIterator[ChatStreamEvent]) -> AsyncIterator[s
                 yield f"event: done\ndata: {body}\n\n"
     except AppError as exc:
         yield f"event: error\ndata: {json.dumps(exc.to_dict())}\n\n"
+    except Exception:
+        # the response has already started, so this is the only way left to
+        # tell the client anything went wrong instead of just cutting the
+        # connection.
+        logger.exception("unhandled error mid-stream")
+        fallback = {"error_code": "INTERNAL_ERROR", "message": "Internal server error"}
+        yield f"event: error\ndata: {json.dumps(fallback)}\n\n"

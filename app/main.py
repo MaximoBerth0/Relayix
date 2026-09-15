@@ -1,3 +1,4 @@
+import logging
 import math
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -21,6 +22,8 @@ from app.infra.ratelimit.redis_limiter import RedisRateLimiter
 from app.observability.logging import setup_logging
 from app.observability.request_id import RequestIdMiddleware
 from app.repositories.pricing_repo import load_pricing_rates
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -78,4 +81,17 @@ async def handle_rate_limited(request: Request, exc: RateLimitExceeded) -> JSONR
         status_code=exc.status_code,
         content=exc.to_dict(),
         headers={"Retry-After": str(math.ceil(exc.retry_after_s))},
+    )
+
+
+@app.exception_handler(Exception)
+async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+    """Catch anything that isn't an AppError so the API never leaks a bare,
+    non-JSON traceback response. The real exception is still logged with its
+    stack trace, only the client-facing body is generic.
+    """
+    logger.exception("unhandled exception", extra={"path": request.url.path})
+    return JSONResponse(
+        status_code=500,
+        content={"error_code": "INTERNAL_ERROR", "message": "Internal server error"},
     )
