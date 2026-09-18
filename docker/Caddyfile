@@ -1,0 +1,43 @@
+# Edge for the production stack. API_DOMAIN and ACME_EMAIL are injected by
+# docker/docker-compose.prod.yml, the certificate is issued and renewed
+# automatically on first request to the domain, so the DNS A/AAAA record has
+# to point at the box before the first `up`.
+{
+	email {$ACME_EMAIL}
+	# nothing on this box talks to the admin API
+	admin off
+}
+
+{$API_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	# /health stays public, an external uptime monitor is the point of it.
+	# /health/ready names which dependency is down, that stays on the box:
+	#   docker compose ... exec api python -c "..."  or curl from inside
+	@readiness path /health/ready
+	handle @readiness {
+		respond 404
+	}
+
+	reverse_proxy api:8000 {
+		# Caddy sets X-Forwarded-For/Proto/Host itself and overwrites whatever
+		# the client sent, which is what makes --forwarded-allow-ips '*' safe
+		# on the api side
+		health_uri /health
+		health_interval 30s
+		health_timeout 5s
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

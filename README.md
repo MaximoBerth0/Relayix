@@ -42,10 +42,20 @@ flowchart LR
 
 ```bash
 cp .env.example .env       # fill in provider keys and ADMIN_API_TOKEN
-make up                    # api + Postgres + Redis, with migrations applied
+poetry install
+make up                    # Postgres + Redis in Docker
+make run                   # migrations, then uvicorn --reload on the host
 ```
 
 See `Makefile` for the rest (`make test`, `make migrate`, `make revision`, ...).
+
+## Deployment
+
+Every push to `main` runs the test suite and, on success, builds and pushes the
+image to `ghcr.io/maximoberth0/relayix` (see `.github/workflows/ci.yml`).
+Rolling a new tag out on the box is manual — see the deploy notes at the top
+of `docker/docker-compose.prod.yml`. Start the box's `.env` from
+`env.production.example`.
 
 ## Project Structure
 
@@ -82,7 +92,7 @@ relayix/
 │   └── observability/     # logging setup and request-id middleware
 │
 ├── alembic/               # migrations
-├── docker/                # Dockerfile + compose stacks (dev and test)
+├── docker/                # Dockerfile + compose stacks (dev, test and prod)
 ├── docs/                  # architecture docs, start at docs/README.md
 ├── tests/                 # unit and integration suites
 ├── pyproject.toml

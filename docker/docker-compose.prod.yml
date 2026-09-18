@@ -1,0 +1,170 @@
+# Production stack for a single VM: Caddy on the edge, the API behind it,
+# Postgres and Redis on a private network. The api image comes from GHCR,
+# nothing is built here. Deploying is a new IMAGE_TAG plus:
+#
+#   docker compose --env-file .env -f docker/docker-compose.prod.yml pull api
+#   docker compose --env-file .env -f docker/docker-compose.prod.yml up -d
+#   docker compose --env-file .env -f docker/docker-compose.prod.yml logs -f api
+#
+# While the package is private the box needs credentials once, a PAT with
+# read:packages is enough:
+#
+#   echo $GHCR_TOKEN | docker login ghcr.io -u <github-user> --password-stdin
+#
+# --env-file is not optional. Compose resolves ${...} below against the project
+# directory (docker/), and the file being pointed at lives at the repo root, so
+# without the flag every interpolation here comes up empty. The same root .env
+# is what the api container reads its settings from, see env_file on that
+# service. Start from env.production.example.
+#
+# Only Caddy publishes ports. Postgres and Redis are reachable from the api
+# container and from nothing else, which is why the box's firewall only ever
+# needs 22, 80 and 443 open.
+
+name: relayix
+
+# a container on a small box can fill the disk with its own logs in a week
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: relayix-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?set API_DOMAIN in .env, the certificate is issued for it}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env, Let's Encrypt expiry notices go there}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # issued certificates, losing this volume means re-issuing them and
+      # Let's Encrypt rate limits how often that can happen
+      - caddy_data:/data
+      - caddy_config:/config
+    # service_started, not service_healthy: a sick API should answer 502
+    # through Caddy, not take the whole edge down with it
+    depends_on:
+      - api
+    networks:
+      - edge
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: ${CADDY_MEMORY_LIMIT:-256m}
+
+  api:
+    # built and pushed by CI, never on the box. IMAGE_TAG should be the commit
+    # sha that produced it: an immutable tag makes `up -d` pull what it does
+    # not already have, and makes a rollback a tag change plus one `up -d`
+    image: ghcr.io/maximoberth0/relayix:${IMAGE_TAG:?set IMAGE_TAG in .env, the GHCR tag to run}
+    container_name: relayix-api
+    restart: unless-stopped
+    # every Settings field comes from here. DATABASE_URL and REDIS_URL must
+    # point at the service names below (db, redis), not at localhost
+    env_file:
+      - ../.env
+    expose:
+      - "8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # the entrypoint migrates before serving, and uvicorn needs the room to
+    # drain in-flight requests on the way out
+    stop_grace_period: 40s
+    networks:
+      - edge
+      - backend
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: ${API_MEMORY_LIMIT:-2g}
+
+  db:
+    image: postgres:16
+    container_name: relayix-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      # cheap corruption detection, and it can only be set at initdb time
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # the default 64MB kills parallel workers and larger sorts
+    shm_size: 256mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    # no ports: nothing outside the compose network talks to Postgres. For a
+    # psql session:  docker compose ... exec db psql -U <user> -d <db>
+    networks:
+      - backend
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: ${DB_MEMORY_LIMIT:-2g}
+
+  # backs the rate limiter and idempotency store. No volume: every key in it
+  # is either a token bucket, a cache or an idempotency record with its own TTL.
+  redis:
+    image: redis:7-alpine
+    container_name: relayix-redis
+    restart: unless-stopped
+    # the password is redundant while the port stays unpublished, and stops
+    # being redundant the first time someone publishes it to debug something
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-256mb}
+      # buckets, caches and idempotency records only, so evicting the coldest
+      # key beats refusing the write and failing the rate limiter open
+      - --maxmemory-policy
+      - allkeys-lru
+      - --requirepass
+      - ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env, it must match the one in REDIS_URL}
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD:?}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - backend
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: ${REDIS_MEMORY_LIMIT:-512m}
+
+networks:
+  # caddy <-> api, and the api's own outbound traffic (OpenAI, Anthropic)
+  edge:
+  # api <-> db and redis. internal, so neither datastore has a route off the
+  # box in either direction
+  backend:
+    internal: true
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

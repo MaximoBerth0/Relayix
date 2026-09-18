@@ -1,19 +1,31 @@
+# Keeps the build context to what the image actually needs: app/, alembic/,
+# alembic.ini, pyproject.toml and poetry.lock.
+# .env in particular must never reach the daemon, the container gets its
+# configuration from the environment at run time.
+
 .git
 .gitignore
-.venv
-venv
+.github
 __pycache__
 *.py[cod]
 .pytest_cache
 .ruff_cache
-.vscode
-.idea
-
-# never bake secrets into the image: the compose file injects env vars instead
+.mypy_cache
+.venv
+venv
 .env
 .env.*
-
-docs
+env.production.example
+.vscode
+.idea
 tests
+pytest.ini
+docs
 README.md
 LICENSE
+CLAUDE.md
+*.log
+
+# the entrypoint is copied by the Dockerfile, the rest of docker/ is host-side
+docker/docker-compose*.yml
+docker/Caddyfile

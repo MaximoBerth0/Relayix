@@ -1,9 +1,10 @@
-# Local development stack: Postgres + Redis + the API, so nothing has to be
-# installed on the host. Run from the repo root:
-#   docker compose -f docker/docker-compose.yml up --build
+# Local development: Postgres + Redis only. The api runs on the host via
+# `poetry run uvicorn app.main:app --reload` (see `make run`), reading its
+# config from the repo-root .env, whose defaults already point at these
+# containers on localhost. Run from the repo root:
+#   docker compose -f docker/docker-compose.yml up -d
 #
-# Credentials are hardcoded dev values on purpose. Provider API keys are the only
-# real secrets and they are read from the repo-root .env (optional).
+# Credentials are hardcoded dev values on purpose.
 #
 # Ports 5432/6379 collide with docker-compose-test.yml, bring that stack down first.
 
@@ -39,50 +40,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-
-  api:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    container_name: relayix_api
-    # provider credentials (OPENAI_API_KEY / ANTHROPIC_API_KEY) and any local
-    # override live here
-    env_file:
-      - path: ../.env
-        required: false
-    environment:
-      ENVIRONMENT: development
-      DEBUG: "true"
-      # service names resolve on the compose network
-      DATABASE_URL: postgresql+asyncpg://postgres:relayix@db:5432/relayix_db
-      # the postgres image serves plaintext only
-      DB_SSL: disable
-      REDIS_URL: redis://redis:6379/0
-      RUN_MIGRATIONS: "true"
-      ADMIN_API_TOKEN: relayix-dev-admin-token
-    ports:
-      - "8000:8000"
-    # source is mounted so --reload picks up edits without a rebuild
-    volumes:
-      - ../app:/app/app
-      - ../alembic:/app/alembic
-      - ../scripts:/app/scripts
-    command:
-      ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    # readiness, not liveness: this should go red when Postgres or Redis is
-    # unreachable, which /health (deliberately dependency-free) never does.
-    healthcheck:
-      test:
-        ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')\""]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
 
 volumes:
   pgdata:

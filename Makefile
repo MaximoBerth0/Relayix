@@ -1,16 +1,15 @@
-# Local development stack. everything runs in Docker, nothing needs to be
-# installed on the host except Docker itself.
+# Local development: Postgres + Redis in Docker, the api runs on the host via
+# Poetry (`poetry install` once, then `make run`).
 
 COMPOSE      := docker compose -f docker/docker-compose.yml
 COMPOSE_TEST := docker compose -f docker/docker-compose-test.yml
 
-.PHONY: up down logs sh reset backing-up test-up test-down test migrate revision current heads
+.PHONY: up down logs reset run test-up test-down test migrate revision current heads
 
-## full stack (db + redis + api) 
+## backing services (db + redis)
 
-up:            ## Build and start the whole stack (api on :8000)
-	$(COMPOSE) up --build -d
-	$(COMPOSE) logs -f api
+up:            ## Start Postgres + Redis in the background
+	$(COMPOSE) up -d
 
 down:          ## Stop the stack (keeps the data volumes)
 	$(COMPOSE) down
@@ -18,28 +17,28 @@ down:          ## Stop the stack (keeps the data volumes)
 reset:         ## Stop the stack AND wipe the Postgres/Redis volumes
 	$(COMPOSE) down -v
 
-logs:          ## Tail the api logs
-	$(COMPOSE) logs -f api
+logs:          ## Tail the backing services' logs
+	$(COMPOSE) logs -f
 
-sh:            ## Shell inside the api container (skips migrations)
-	$(COMPOSE) run --rm -e RUN_MIGRATIONS=false api bash
+## app (runs on the host)
 
-backing-up:    ## Start only Postgres and Redis (run the app on the host yourself)
-	$(COMPOSE) up -d db redis
+run:           ## Apply migrations, then start uvicorn with --reload
+	poetry run alembic upgrade head
+	poetry run uvicorn app.main:app --reload
 
-## migrations (run inside the api container) 
+## migrations (run on the host, against the backing Postgres)
 
 migrate:       ## Apply all pending migrations
-	$(COMPOSE) exec api alembic upgrade head
+	poetry run alembic upgrade head
 
 revision:      ## Autogenerate a migration: make revision m="your message"
-	$(COMPOSE) exec api alembic revision --autogenerate -m "$(m)"
+	poetry run alembic revision --autogenerate -m "$(m)"
 
 current:       ## Show the database's current revision
-	$(COMPOSE) exec api alembic current
+	poetry run alembic current
 
 heads:         ## Show the latest migration file revision
-	$(COMPOSE) exec api alembic heads
+	poetry run alembic heads
 
 ## tests (separate, volume-less stack; stop `up` first, ports collide) 
 

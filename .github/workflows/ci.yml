@@ -1,0 +1,109 @@
+# Test on every push to main, then build the runtime image (docker/Dockerfile)
+# and push it to GHCR tagged with the commit sha. Rolling that image out on the
+# box stays manual, see the deploy notes at the top of
+# docker/docker-compose.prod.yml: bump IMAGE_TAG in the box's .env and
+# `docker compose pull && up -d`.
+#
+# No repo secrets are required: the Postgres/Redis the test job talks to are
+# throwaway service containers matching tests/conftest.py's hardcoded
+# DATABASE_URL/REDIS_URL, and GHCR auth uses the GITHUB_TOKEN GitHub injects
+# automatically (packages: write below is what grants it push access, nothing
+# to add in repo settings).
+
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+
+env:
+  IMAGE_NAME: ghcr.io/maximoberth0/relayix
+  POETRY_VERSION: "2.4.1"
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    # mirrors docker/docker-compose-test.yml: same images, credentials, db
+    # name and ports, so tests/conftest.py's hardcoded URLs need no changes
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U user -d test_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install Poetry
+        run: pipx install poetry==${{ env.POETRY_VERSION }}
+
+      - name: Cache the virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: poetry-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
+
+      - name: Install dependencies
+        run: |
+          poetry config virtualenvs.in-project true
+          poetry install --no-root
+
+      - name: Run tests
+        run: poetry run pytest -v
+
+  build-and-push:
+    name: Build and push image
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+          # the sha tag is what IMAGE_TAG in the box's .env should point to,
+          # :main is only there for humans browsing the package page
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:main
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
