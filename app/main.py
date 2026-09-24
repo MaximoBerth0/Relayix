@@ -20,7 +20,7 @@ from app.infra.global_exceptions import AppError
 from app.infra.ratelimit.redis_client import build_redis_client
 from app.infra.ratelimit.redis_limiter import RedisRateLimiter
 from app.observability.logging import setup_logging
-from app.observability.request_id import RequestIdMiddleware
+from app.observability.tracing import setup_tracing
 from app.repositories.pricing_repo import load_pricing_rates
 
 logger = logging.getLogger(__name__)
@@ -55,12 +55,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await redis_client.aclose()
+        if tracer_provider is not None:
+            tracer_provider.shutdown()  # flush pending spans
 
 
 app = FastAPI(title="Relayix", lifespan=lifespan)
 
-# tag every request with a correlation id (X-Request-ID) for the logs
-app.add_middleware(RequestIdMiddleware)
+tracer_provider = setup_tracing(app)
 
 app.include_router(health.router)
 app.include_router(chat.router)

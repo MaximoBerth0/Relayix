@@ -81,6 +81,11 @@ class Settings(BaseSettings):
     # how long to stay open before a single test request is allowed (half-open).
     circuit_breaker_reset_timeout_s: float = 30.0
 
+    # OpenTelemetry, spans go over OTLP gRPC to the collector sidecar
+    otel_enabled: bool = False
+    otel_service_name: str = "relayix"
+    otel_exporter_otlp_endpoint: str = "http://localhost:4317"
+
     @property
     def is_production(self) -> bool:
         return self.environment == "production"

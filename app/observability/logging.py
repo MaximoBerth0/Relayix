@@ -1,7 +1,19 @@
 import logging
 import logging.config
 
+from opentelemetry import trace
+
 from app.infra.config import settings
+
+
+class TraceContextFilter(logging.Filter):
+    """Stamps each record with the active span's ids, so logs join their trace."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        ctx = trace.get_current_span().get_span_context()
+        record.trace_id = format(ctx.trace_id, "032x") if ctx.is_valid else "-"
+        record.span_id = format(ctx.span_id, "016x") if ctx.is_valid else "-"
+        return True
 
 
 def setup_logging() -> None:
@@ -12,14 +24,14 @@ def setup_logging() -> None:
         "version": 1,
         "disable_existing_loggers": False,
         "filters": {
-            "request_id": {
-                "()": "app.observability.request_id.RequestIdFilter",
+            "trace_context": {
+                "()": "app.observability.logging.TraceContextFilter",
             },
         },
         "formatters": {
             "json": {
                 "()": "pythonjsonlogger.json.JsonFormatter",
-                "fmt": "%(asctime)s %(name)s %(levelname)s %(request_id)s %(message)s",
+                "fmt": "%(asctime)s %(name)s %(levelname)s %(trace_id)s %(span_id)s %(message)s",
                 "rename_fields": {
                     "asctime": "timestamp",
                     "levelname": "level",
@@ -27,7 +39,7 @@ def setup_logging() -> None:
                 },
             },
             "plain": {
-                "format": "%(asctime)s %(name)s %(levelname)s [%(request_id)s] %(message)s",
+                "format": "%(asctime)s %(name)s %(levelname)s [%(trace_id)s] %(message)s",
             },
         },
         "handlers": {
@@ -35,7 +47,7 @@ def setup_logging() -> None:
                 "class": "logging.StreamHandler",
                 "stream": "ext://sys.stdout",
                 "formatter": "json" if settings.is_production else "plain",  # structured logs in prod
-                "filters": ["request_id"],
+                "filters": ["trace_context"],
             },
         },
         "root": {

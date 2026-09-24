@@ -1,5 +1,4 @@
-# Built by CI and pushed to ghcr.io/maximoberth0/relayix, the box only ever
-# pulls it. The context is the repo root, not this folder:
+# Built by CI (arm64) and pushed to ECR, Fargate pulls it. Context is the repo root:
 #   docker build -f docker/Dockerfile -t relayix-api .
 #
 # Two stages: the builder owns Poetry and the compilers, the runtime gets the
@@ -43,8 +42,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/app/.venv/bin:$PATH" \
     WEB_CONCURRENCY=4
 
-# what attaches the GHCR package to this repository, and what makes the commit
-# behind a running tag recoverable from the image alone
+# makes the commit behind a running tag recoverable from the image
 ARG GIT_SHA=unknown
 LABEL org.opencontainers.image.source="https://github.com/MaximoBerth0/Relayix" \
       org.opencontainers.image.description="Relayix API" \
@@ -72,9 +70,7 @@ USER appuser
 
 EXPOSE 8000
 
-# readiness, not liveness: on a single box `docker ps` saying "healthy" should
-# mean the API can actually reach Postgres and Redis, not just that the
-# process is up
+# local only, ECS ignores it and the ALB checks /health
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD ["python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=4).status == 200 else sys.exit(1)"]
 
