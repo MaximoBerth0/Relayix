@@ -1,0 +1,9 @@
+# cp terraform.tfvars.example terraform.tfvars
+aws_region      = "us-east-1"
+image_tag       = "CHANGE_ME"
+certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/CHANGE_ME"
+
+# app_env = {
+#   DEFAULT_RATE_LIMIT_RPM = "60"
+#   DB_POOL_SIZE           = "5"
+# }

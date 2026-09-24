@@ -22,7 +22,7 @@ Authenticate, throttle, and short-circuit repeated requests before any provider 
 
 ```mermaid
 flowchart TB
-    B1["Receive request<br/>tag X-Request-ID"] --> B2["Validate API key"]
+    B1["Receive request<br/>open trace span"] --> B2["Validate API key"]
     B2 --> B3{Valid?}
     B3 -- No --> R401["401 UNAUTHORIZED"]
     B3 -- Yes --> B4["Rate limit per key"]

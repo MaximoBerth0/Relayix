@@ -51,11 +51,18 @@ See `Makefile` for the rest (`make test`, `make migrate`, `make revision`, ...).
 
 ## Deployment
 
-Every push to `main` runs the test suite and, on success, builds and pushes the
-image to `ghcr.io/maximoberth0/relayix` (see `.github/workflows/ci.yml`).
-Rolling a new tag out on the box is manual — see the deploy notes at the top
-of `docker/docker-compose.prod.yml`. Start the box's `.env` from
-`env.production.example`.
+AWS ECS Fargate (arm64) behind an ALB, with RDS Postgres, ElastiCache Redis and
+an ADOT sidecar that ships OpenTelemetry traces to X-Ray. Everything lives in
+`terraform/`.
+
+1. `cd terraform && cp terraform.tfvars.example terraform.tfvars`, set the ACM certificate.
+2. First apply creates ECR and the GitHub OIDC role: `terraform apply -target=aws_ecr_repository.api -target=aws_iam_role.github_actions`.
+3. Set the repo variables `AWS_REGION` and `AWS_ROLE_ARN`, push to `main`, CI pushes `relayix:<sha>` to ECR.
+4. Set the provider keys (`aws ssm put-parameter --overwrite ...`, see `terraform/secrets.tf`).
+5. `terraform apply -var image_tag=<sha>`, then run `terraform output -raw migrate_command`.
+6. Point the API domain at `terraform output alb_dns_name`.
+
+A release is steps 3 and 5 with the new sha.
 
 ## Project Structure
 
@@ -89,10 +96,11 @@ relayix/
 │   │   ├── ratelimit/     # Redis client and Redis-backed limiter
 │   │   └── idempotency/   # Redis-backed idempotency store
 │   │
-│   └── observability/     # logging setup and request-id middleware
+│   └── observability/     # logging and OpenTelemetry tracing
 │
 ├── alembic/               # migrations
-├── docker/                # Dockerfile + compose stacks (dev, test and prod)
+├── docker/                # Dockerfile + compose stacks (dev and test)
+├── terraform/             # AWS Fargate infrastructure
 ├── docs/                  # architecture docs, start at docs/README.md
 ├── tests/                 # unit and integration suites
 ├── pyproject.toml

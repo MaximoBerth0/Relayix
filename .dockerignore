@@ -15,7 +15,6 @@ __pycache__
 venv
 .env
 .env.*
-env.production.example
 .vscode
 .idea
 tests
@@ -28,4 +27,4 @@ CLAUDE.md
 
 # the entrypoint is copied by the Dockerfile, the rest of docker/ is host-side
 docker/docker-compose*.yml
-docker/Caddyfile
+terraform
