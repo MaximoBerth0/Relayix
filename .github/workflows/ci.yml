@@ -67,6 +67,8 @@ jobs:
   build-and-push:
     name: Build and push image
     needs: test
+    # skipped until the AWS bootstrap stack exists and the repo variables are set
+    if: vars.AWS_ROLE_ARN != ''
     # native arm64 runner, the ECS container instances are Graviton
     runs-on: ubuntu-24.04-arm
     permissions:

@@ -70,7 +70,7 @@ Request path — see `docs/system_flow.md` for the full diagrams:
 
 ## Testing
 
-`tests/flow/` are integration tests over the real HTTP surface (ASGI transport) against the test Postgres/Redis stack (`make test-up`); `tests/unit/` covers pure logic (routing strategies, circuit breaker states) with no I/O. Provider calls are faked via `tests/fixtures/adapters.py`, never real network calls.
+`tests/integration/` runs against the test Postgres/Redis stack (`make test-up`): `api/` drives the real HTTP surface (ASGI transport), `services/` calls services directly. `tests/unit/` covers pure logic (routing strategies, circuit breaker states) with no I/O. Provider calls are faked via `tests/fixtures/adapters.py`, never real network calls.
 
 ## Conventions
 
