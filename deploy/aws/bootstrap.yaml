@@ -1,0 +1,112 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Relayix bootstrap: ECR repository, GitHub Actions OIDC role and the provider
+  keys secret. Deployed once, before the app stack, so CI has somewhere to push
+  and the keys can be set before the first task starts.
+
+Parameters:
+  Project:
+    Type: String
+    Default: relayix
+  GithubRepo:
+    Type: String
+    Default: MaximoBerth0/Relayix
+    Description: owner/repo allowed to assume the CI role
+  CreateGithubOidcProvider:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: false if the account already has the token.actions.githubusercontent.com provider
+
+Conditions:
+  CreateOidc: !Equals [!Ref CreateGithubOidcProvider, "true"]
+
+Resources:
+  Repository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref Project
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules": [{
+            "rulePriority": 1,
+            "description": "keep the last 20 images, enough to roll back",
+            "selection": {"tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 20},
+            "action": {"type": "expire"}
+          }]}
+
+  GithubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOidc
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+
+  # only main may assume it, no long-lived keys in GitHub
+  GithubActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRoleWithWebIdentity
+            Principal:
+              Federated: !If
+                - CreateOidc
+                - !Ref GithubOidcProvider
+                - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${GithubRepo}:ref:refs/heads/main
+      Policies:
+        - PolicyName: ecr-push
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource: !GetAtt Repository.Arn
+
+  # Both keys must exist in the JSON (ECS refuses to start a task on a missing
+  # one), an empty value just leaves that provider unregistered. Set them with
+  # `aws secretsmanager put-secret-value`, CloudFormation never rewrites the
+  # value while this template's SecretString stays the same.
+  ProviderKeysSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${Project}/provider-keys
+      Description: OPENAI_API_KEY and ANTHROPIC_API_KEY for the api tasks
+      SecretString: '{"OPENAI_API_KEY":"","ANTHROPIC_API_KEY":""}'
+
+Outputs:
+  RepositoryUri:
+    Value: !GetAtt Repository.RepositoryUri
+    Export:
+      Name: !Sub ${AWS::StackName}-RepositoryUri
+  GithubActionsRoleArn:
+    Description: set as the AWS_ROLE_ARN repository variable in GitHub
+    Value: !GetAtt GithubActionsRole.Arn
+  ProviderKeysSecretArn:
+    Value: !Ref ProviderKeysSecret
+    Export:
+      Name: !Sub ${AWS::StackName}-ProviderKeysSecretArn

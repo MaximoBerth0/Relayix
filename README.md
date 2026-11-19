@@ -37,6 +37,7 @@ flowchart LR
 - **Alembic** — database schema migrations.
 - **Redis** — rate limiting and idempotency.
 - **Docker** — containerized build and deployment.
+- **AWS** (ECS on EC2, RDS, ElastiCache, CloudFormation): production infrastructure.
 
 ## Running locally
 
@@ -51,18 +52,20 @@ See `Makefile` for the rest (`make test`, `make migrate`, `make revision`, ...).
 
 ## Deployment
 
-AWS ECS Fargate (arm64) behind an ALB, with RDS Postgres, ElastiCache Redis and
-an ADOT sidecar that ships OpenTelemetry traces to X-Ray. Everything lives in
-`terraform/`.
+AWS ECS on EC2 (Graviton, arm64) behind an ALB, with RDS Postgres, ElastiCache
+Redis and an ADOT sidecar that ships OpenTelemetry traces to X-Ray. The
+infrastructure is CloudFormation under `deploy/aws/`, releases go out through
+`deploy/deploy.sh`. The full picture is in [docs/deployment.md](docs/deployment.md).
 
-1. `cd terraform && cp terraform.tfvars.example terraform.tfvars`, set the ACM certificate.
-2. First apply creates ECR and the GitHub OIDC role: `terraform apply -target=aws_ecr_repository.api -target=aws_iam_role.github_actions`.
-3. Set the repo variables `AWS_REGION` and `AWS_ROLE_ARN`, push to `main`, CI pushes `relayix:<sha>` to ECR.
-4. Set the provider keys (`aws ssm put-parameter --overwrite ...`, see `terraform/secrets.tf`).
-5. `terraform apply -var image_tag=<sha>`, then run `terraform output -raw migrate_command`.
-6. Point the API domain at `terraform output alb_dns_name`.
+1. Create the bootstrap stack (ECR, the GitHub OIDC role, the provider keys secret):
+   `aws cloudformation deploy --stack-name relayix-bootstrap --template-file deploy/aws/bootstrap.yaml --capabilities CAPABILITY_IAM`
+2. Set the repo variables `AWS_REGION` and `AWS_ROLE_ARN` (the stack's `GithubActionsRoleArn` output), push to `main`, CI pushes `relayix:<sha>` to ECR.
+3. Set the provider keys:
+   `aws secretsmanager put-secret-value --secret-id relayix/provider-keys --secret-string '{"OPENAI_API_KEY":"...","ANTHROPIC_API_KEY":"..."}'`
+4. `AWS_REGION=us-east-1 deploy/deploy.sh <sha>`, optionally with `CERTIFICATE_ARN=<acm arn>` for HTTPS. The first run creates the app stack and migrates the empty database.
+5. Point the API domain at the app stack's `AlbDnsName` output.
 
-A release is steps 3 and 5 with the new sha.
+A release is steps 2 and 4 with the new sha.
 
 ## Project Structure
 
@@ -100,7 +103,7 @@ relayix/
 │
 ├── alembic/               # migrations
 ├── docker/                # Dockerfile + compose stacks (dev and test)
-├── terraform/             # AWS Fargate infrastructure
+├── deploy/                # AWS CloudFormation stacks + deploy script
 ├── docs/                  # architecture docs, start at docs/README.md
 ├── tests/                 # unit and integration suites
 ├── pyproject.toml

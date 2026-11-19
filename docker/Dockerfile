@@ -1,4 +1,4 @@
-# Built by CI (arm64) and pushed to ECR, Fargate pulls it. Context is the repo root:
+# Built by CI (arm64) and pushed to ECR, the ECS instances pull it. Context is the repo root:
 #   docker build -f docker/Dockerfile -t relayix-api .
 #
 # Two stages: the builder owns Poetry and the compilers, the runtime gets the

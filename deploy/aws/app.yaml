@@ -1,0 +1,719 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Relayix on ECS (EC2 launch type, Graviton): ALB, an autoscaling group of
+  ECS-optimized instances behind a capacity provider, RDS Postgres, ElastiCache
+  Redis and an ADOT sidecar shipping traces to X-Ray. Deployed by deploy/deploy.sh.
+
+# Container instances sit in public subnets with a public IP and no NAT gateway:
+# they need outbound to OpenAI/Anthropic and ECR, and their security group only
+# admits the ALB. Tasks use bridge networking, so they go out through the host.
+# Postgres and Redis sit in private subnets with no route out. There is no SSH,
+# a shell on an instance is `aws ssm start-session --target <instance-id>`.
+
+Parameters:
+  Project:
+    Type: String
+    Default: relayix
+  BootstrapStackName:
+    Type: String
+    Default: relayix-bootstrap
+  ImageTag:
+    Type: String
+    Description: ECR tag the service runs, the commit sha CI pushed
+  MigrateImageTag:
+    Type: String
+    Default: ""
+    Description: ECR tag of the migration task, empty means ImageTag. deploy.sh moves it ahead of ImageTag
+  RunService:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: false only on the first create, so migrations run before any api task starts
+  CertificateArn:
+    Type: String
+    Default: ""
+    Description: ACM certificate for the API domain, same region. Empty serves plain HTTP on 80
+
+  # compute
+  InstanceType:
+    Type: String
+    Default: t4g.medium
+    Description: arm64 only, the image is built for linux/arm64
+  MinInstances:
+    Type: Number
+    Default: 1
+  MaxInstances:
+    Type: Number
+    Default: 3
+  EcsAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ecs/optimized-ami/amazon-linux-2023/arm64/recommended/image_id
+  MinTasks:
+    Type: Number
+    Default: 1
+  MaxTasks:
+    Type: Number
+    Default: 3
+  AdotImage:
+    Type: String
+    Default: public.ecr.aws/aws-observability/aws-otel-collector:v0.40.0
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+
+  # data stores
+  DbInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+  DbAllocatedStorage:
+    Type: Number
+    Default: 20
+  DbDeletionProtection:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+  RedisNodeType:
+    Type: String
+    Default: cache.t4g.micro
+
+Conditions:
+  HasCertificate: !Not [!Equals [!Ref CertificateArn, ""]]
+  ServiceEnabled: !Equals [!Ref RunService, "true"]
+  MigrateUsesImageTag: !Equals [!Ref MigrateImageTag, ""]
+
+Resources:
+  # network
+
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags: [{ Key: Name, Value: !Ref Project }]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{ Key: Name, Value: !Ref Project }]
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.0.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: !Sub "${Project}-public-a" }]
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: !Sub "${Project}-public-b" }]
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.10.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags: [{ Key: Name, Value: !Sub "${Project}-private-a" }]
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.11.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags: [{ Key: Name, Value: !Sub "${Project}-private-b" }]
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${Project}-public" }]
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetARoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBRoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  # security groups
+
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${Project} ALB, public HTTP/HTTPS
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0 }
+
+  # bridge networking maps container port 8000 to a dynamic host port
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${Project} ECS container instances, only the ALB on the dynamic port range
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 32768
+          ToPort: 65535
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${Project} Postgres, only the container instances
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref InstanceSecurityGroup
+
+  RedisSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${Project} Redis, only the container instances
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId: !Ref InstanceSecurityGroup
+
+  # load balancer
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Ref Project
+      Type: application
+      Scheme: internet-facing
+      SecurityGroups: [!Ref AlbSecurityGroup]
+      Subnets: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      LoadBalancerAttributes:
+        # above PROVIDER_TIMEOUT_S, streamed completions keep the connection open.
+        # uvicorn's keep-alive must stay above this, see docker/entrypoint.sh
+        - { Key: idle_timeout.timeout_seconds, Value: "120" }
+        - { Key: routing.http.drop_invalid_header_fields.enabled, Value: "true" }
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${Project}-api
+      TargetType: instance
+      Protocol: HTTP
+      Port: 8000
+      VpcId: !Ref Vpc
+      HealthCheckPath: /health
+      Matcher: { HttpCode: "200" }
+      HealthCheckIntervalSeconds: 15
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      TargetGroupAttributes:
+        # covers a streamed completion that started right before the drain
+        - { Key: deregistration_delay.timeout_seconds, Value: "45" }
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions: !If
+        - HasCertificate
+        - - Type: redirect
+            RedirectConfig: { Protocol: HTTPS, Port: "443", StatusCode: HTTP_301 }
+        - - Type: forward
+            TargetGroupArn: !Ref TargetGroup
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasCertificate
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates: [{ CertificateArn: !Ref CertificateArn }]
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # /health/ready names which dependency is down, keep it off the internet
+  HideReadinessRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !If [HasCertificate, !Ref HttpsListener, !Ref HttpListener]
+      Priority: 10
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig: { Values: [/health/ready] }
+      Actions:
+        - Type: fixed-response
+          FixedResponseConfig: { StatusCode: "404", ContentType: text/plain }
+
+  # data stores
+
+  DbPasswordSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${Project}/db-password
+      GenerateSecretString:
+        PasswordLength: 32
+        ExcludePunctuation: true # lives inside DATABASE_URL
+
+  RedisAuthSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${Project}/redis-auth
+      GenerateSecretString:
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  AdminTokenSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${Project}/admin-api-token
+      Description: ADMIN_API_TOKEN, gates /v1/api-keys
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub ${Project} private subnets
+      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+
+  # major version only, RDS picks the minor and AutoMinorVersionUpgrade moves it,
+  # a pinned minor would fall behind the live instance
+  Database:
+    Type: AWS::RDS::DBInstance
+    Metadata:
+      cfn-lint: { config: { ignore_checks: [W3691] } }
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Ref Project
+      Engine: postgres
+      EngineVersion: "16"
+      DBInstanceClass: !Ref DbInstanceClass
+      AllocatedStorage: !Ref DbAllocatedStorage
+      StorageType: gp3
+      StorageEncrypted: true
+      DBName: !Ref Project
+      MasterUsername: !Ref Project
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${DbPasswordSecret}:SecretString}}"
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups: [!Ref DbSecurityGroup]
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 7
+      AutoMinorVersionUpgrade: true
+      DeletionProtection: !Ref DbDeletionProtection
+
+  RedisSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: !Sub ${Project} private subnets
+      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+
+  # no persistence needed, every key is a bucket or an idempotency record with a TTL
+  Redis:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupId: !Ref Project
+      ReplicationGroupDescription: !Sub ${Project} rate limiting and idempotency
+      Engine: redis
+      EngineVersion: "7.1"
+      CacheNodeType: !Ref RedisNodeType
+      NumCacheClusters: 1
+      Port: 6379
+      CacheParameterGroupName: default.redis7
+      CacheSubnetGroupName: !Ref RedisSubnetGroup
+      SecurityGroupIds: [!Ref RedisSecurityGroup]
+      AtRestEncryptionEnabled: true
+      TransitEncryptionEnabled: true
+      AuthToken: !Sub "{{resolve:secretsmanager:${RedisAuthSecret}:SecretString}}"
+
+  # the app reads whole URLs, built here from the generated passwords
+  ConnectionSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${Project}/connection-urls
+      Description: DATABASE_URL and REDIS_URL for the api and migration tasks
+      SecretString: !Sub
+        - '{"DATABASE_URL":"postgresql+asyncpg://${Project}:{{resolve:secretsmanager:${DbPasswordSecret}:SecretString}}@${DbHost}:5432/${Project}","REDIS_URL":"rediss://:{{resolve:secretsmanager:${RedisAuthSecret}:SecretString}}@${RedisHost}:6379/0"}'
+        - DbHost: !GetAtt Database.Endpoint.Address
+          RedisHost: !GetAtt Redis.PrimaryEndPoint.Address
+
+  # IAM
+
+  # pull the image, write logs, resolve secrets at task start
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: secrets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref ConnectionSecret
+                  - !Ref AdminTokenSecret
+                  - Fn::ImportValue: !Sub ${BootstrapStackName}-ProviderKeysSecretArn
+
+  # what the running containers may call: the collector ships traces to X-Ray
+  # and the default ADOT config writes task metrics as EMF logs
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:*
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AWSXrayWriteOnlyAccess
+      Policies:
+        - PolicyName: adot-metrics
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:DescribeLogStreams
+                  - logs:PutLogEvents
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ecs/application/metrics*
+
+  # the ECS agent on each instance, plus Session Manager instead of SSH
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  # ECS cluster and capacity
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref Project
+      ClusterSettings:
+        - { Name: containerInsights, Value: enabled }
+
+  # IMDSv2 with a hop limit of 1: the agent (host network) reaches it, bridge
+  # containers do not, so a task can only use its own task role, never the
+  # instance role
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref EcsAmiId
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile: { Arn: !GetAtt InstanceProfile.Arn }
+        SecurityGroupIds: [!Ref InstanceSecurityGroup]
+        MetadataOptions:
+          HttpEndpoint: enabled
+          HttpTokens: required
+          HttpPutResponseHopLimit: 1
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs: { VolumeSize: 30, VolumeType: gp3, Encrypted: true }
+        TagSpecifications:
+          - ResourceType: instance
+            Tags: [{ Key: Name, Value: !Sub "${Project}-ecs" }]
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            cat >> /etc/ecs/ecs.config <<EOF
+            ECS_CLUSTER=${Cluster}
+            ECS_ENABLE_TASK_IAM_ROLE=true
+            ECS_CONTAINER_STOP_TIMEOUT=35s
+            ECS_ENABLE_CONTAINER_METADATA=true
+            EOF
+
+  # no DesiredCapacity: the capacity provider owns it
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      MinSize: !Ref MinInstances
+      MaxSize: !Ref MaxInstances
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 60
+      Tags:
+        - { Key: AmazonECSManaged, Value: "", PropagateAtLaunch: true }
+
+  # managed scaling adds instances when a task does not fit (a rolling deploy,
+  # a scale out); managed draining moves tasks off an instance before the ASG
+  # terminates it. Termination protection stays off so stack deletes do not hang
+  CapacityProvider:
+    Type: AWS::ECS::CapacityProvider
+    Properties:
+      AutoScalingGroupProvider:
+        AutoScalingGroupArn: !Ref AutoScalingGroup
+        ManagedScaling:
+          Status: ENABLED
+          TargetCapacity: 100
+          MinimumScalingStepSize: 1
+          MaximumScalingStepSize: 1
+        ManagedTerminationProtection: DISABLED
+        ManagedDraining: ENABLED
+
+  ClusterCapacityProviders:
+    Type: AWS::ECS::ClusterCapacityProviderAssociations
+    Properties:
+      Cluster: !Ref Cluster
+      CapacityProviders: [!Ref CapacityProvider]
+      DefaultCapacityProviderStrategy:
+        - { CapacityProvider: !Ref CapacityProvider, Weight: 1 }
+
+  # tasks
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${Project}/api
+      RetentionInDays: !Ref LogRetentionDays
+
+  OtelLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${Project}/otel-collector
+      RetentionInDays: !Ref LogRetentionDays
+
+  MigrateLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${Project}/migrate
+      RetentionInDays: !Ref LogRetentionDays
+
+  # Sized so two tasks fit on one t4g.medium (2048 CPU units, ~3.8GB), which
+  # lets a rolling deploy start the new task before stopping the old one.
+  # DB pool is per uvicorn worker: 2 x (3 + 2) = 10 connections per task.
+  ApiTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${Project}-api
+      RequiresCompatibilities: [EC2]
+      NetworkMode: bridge
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      RuntimePlatform: { OperatingSystemFamily: LINUX, CpuArchitecture: ARM64 }
+      ContainerDefinitions:
+        - Name: api
+          Image: !Sub
+            - "${Repo}:${ImageTag}"
+            - Repo: { "Fn::ImportValue": !Sub "${BootstrapStackName}-RepositoryUri" }
+          Essential: true
+          Cpu: 896
+          MemoryReservation: 768
+          Memory: 1536
+          PortMappings: [{ ContainerPort: 8000, HostPort: 0, Protocol: tcp }]
+          Links: [otel-collector]
+          DependsOn: [{ ContainerName: otel-collector, Condition: START }]
+          StopTimeout: 30
+          Environment:
+            - { Name: ENVIRONMENT, Value: production }
+            - { Name: DEBUG, Value: "false" }
+            - { Name: DB_SSL, Value: require }
+            - { Name: RUN_MIGRATIONS, Value: "false" }
+            - { Name: WEB_CONCURRENCY, Value: "2" }
+            - { Name: DB_POOL_SIZE, Value: "3" }
+            - { Name: DB_MAX_OVERFLOW, Value: "2" }
+            - { Name: OTEL_ENABLED, Value: "true" }
+            - { Name: OTEL_SERVICE_NAME, Value: !Ref Project }
+            - { Name: OTEL_EXPORTER_OTLP_ENDPOINT, Value: "http://otel-collector:4317" }
+          Secrets:
+            - { Name: DATABASE_URL, ValueFrom: !Sub "${ConnectionSecret}:DATABASE_URL::" }
+            - { Name: REDIS_URL, ValueFrom: !Sub "${ConnectionSecret}:REDIS_URL::" }
+            - { Name: ADMIN_API_TOKEN, ValueFrom: !Ref AdminTokenSecret }
+            - Name: OPENAI_API_KEY
+              ValueFrom: !Sub
+                - "${Arn}:OPENAI_API_KEY::"
+                - Arn: { "Fn::ImportValue": !Sub "${BootstrapStackName}-ProviderKeysSecretArn" }
+            - Name: ANTHROPIC_API_KEY
+              ValueFrom: !Sub
+                - "${Arn}:ANTHROPIC_API_KEY::"
+                - Arn: { "Fn::ImportValue": !Sub "${BootstrapStackName}-ProviderKeysSecretArn" }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ApiLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: api
+        # receives OTLP on :4317 and ships traces to X-Ray
+        - Name: otel-collector
+          Image: !Ref AdotImage
+          Essential: true
+          Cpu: 128
+          MemoryReservation: 128
+          Memory: 256
+          Command: [--config=/etc/ecs/ecs-default-config.yaml]
+          Environment:
+            - { Name: AWS_REGION, Value: !Ref AWS::Region }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref OtelLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: otel
+
+  # one-off `alembic upgrade head`, run by deploy.sh before the service moves
+  MigrateTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${Project}-migrate
+      RequiresCompatibilities: [EC2]
+      NetworkMode: bridge
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      RuntimePlatform: { OperatingSystemFamily: LINUX, CpuArchitecture: ARM64 }
+      ContainerDefinitions:
+        - Name: migrate
+          Image: !Sub
+            - "${Repo}:${Tag}"
+            - Repo: { "Fn::ImportValue": !Sub "${BootstrapStackName}-RepositoryUri" }
+              Tag: !If [MigrateUsesImageTag, !Ref ImageTag, !Ref MigrateImageTag]
+          Essential: true
+          Cpu: 256
+          MemoryReservation: 256
+          Memory: 512
+          Command: [alembic, upgrade, head]
+          Environment:
+            - { Name: ENVIRONMENT, Value: production }
+            - { Name: DB_SSL, Value: require }
+          Secrets:
+            - { Name: DATABASE_URL, ValueFrom: !Sub "${ConnectionSecret}:DATABASE_URL::" }
+            - { Name: ADMIN_API_TOKEN, ValueFrom: !Ref AdminTokenSecret }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref MigrateLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: migrate
+
+  # No DesiredCount: a new service starts at 1 and autoscaling owns the count
+  # after that, so a stack update never resets a scaled-out service.
+  # A deploy that never gets healthy trips the circuit breaker, ECS rolls the
+  # service back and CloudFormation rolls the stack back with it.
+  Service:
+    Type: AWS::ECS::Service
+    Condition: ServiceEnabled
+    DependsOn: [ClusterCapacityProviders, HttpListener]
+    Properties:
+      ServiceName: !Sub ${Project}-api
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref ApiTaskDefinition
+      CapacityProviderStrategy:
+        - { CapacityProvider: !Ref CapacityProvider, Weight: 1 }
+      HealthCheckGracePeriodSeconds: 60
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker: { Enable: true, Rollback: true }
+      PlacementStrategies:
+        - { Type: spread, Field: "attribute:ecs.availability-zone" }
+        - { Type: binpack, Field: memory }
+      LoadBalancers:
+        - ContainerName: api
+          ContainerPort: 8000
+          TargetGroupArn: !Ref TargetGroup
+      EnableECSManagedTags: true
+      PropagateTags: SERVICE
+
+  ServiceScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Condition: ServiceEnabled
+    Properties:
+      ServiceNamespace: ecs
+      ResourceId: !Sub service/${Cluster}/${Service.Name}
+      ScalableDimension: ecs:service:DesiredCount
+      MinCapacity: !Ref MinTasks
+      MaxCapacity: !Ref MaxTasks
+
+  ServiceCpuScaling:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Condition: ServiceEnabled
+    Properties:
+      PolicyName: !Sub ${Project}-api-cpu
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ServiceScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+
+Outputs:
+  AlbDnsName:
+    Description: point the API domain (CNAME/alias) here
+    Value: !GetAtt LoadBalancer.DNSName
+  ClusterName:
+    Value: !Ref Cluster
+  CapacityProviderName:
+    Value: !Ref CapacityProvider
+  MigrateTaskDefinitionArn:
+    Value: !Ref MigrateTaskDefinition
+  AdminTokenSecretArn:
+    Description: ADMIN_API_TOKEN lives in this secret
+    Value: !Ref AdminTokenSecret

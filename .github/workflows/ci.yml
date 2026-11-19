@@ -1,6 +1,7 @@
 # Tests on every push to main, then builds the arm64 image and pushes it to ECR
-# tagged with the commit sha. Deploy is `terraform apply -var image_tag=<sha>`.
-# Needs repo variables AWS_REGION and AWS_ROLE_ARN (terraform output github_actions_role_arn).
+# tagged with the commit sha. Deploy is `deploy/deploy.sh <sha>`.
+# Needs repo variables AWS_REGION and AWS_ROLE_ARN (GithubActionsRoleArn output
+# of the bootstrap stack, deploy/aws/bootstrap.yaml).
 
 name: CI/CD
 
@@ -66,7 +67,7 @@ jobs:
   build-and-push:
     name: Build and push image
     needs: test
-    # native arm64 runner, the Fargate tasks run on Graviton
+    # native arm64 runner, the ECS container instances are Graviton
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: read

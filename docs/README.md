@@ -14,6 +14,8 @@ unhealthy, enforces per-key rate limits, and records token-based cost per reques
   [resilience](core/resilience.md) (circuit breaker) ·
   [ratelimit](core/ratelimit.md) ·
   [accounting](core/accounting.md) (tokens, pricing, usage)
+- **How it runs in production:** [deployment.md](deployment.md): AWS ECS on EC2,
+  the CloudFormation stacks and the release flow.
 
 ## Layers
 

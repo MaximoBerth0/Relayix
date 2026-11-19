@@ -27,4 +27,4 @@ CLAUDE.md
 
 # the entrypoint is copied by the Dockerfile, the rest of docker/ is host-side
 docker/docker-compose*.yml
-terraform
+deploy
