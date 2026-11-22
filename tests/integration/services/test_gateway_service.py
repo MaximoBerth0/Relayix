@@ -3,8 +3,12 @@ failover policy, and usage billing, wired together against a real DB (no
 HTTP layer; provider calls are stubbed).
 """
 
+from decimal import Decimal
+from uuid import uuid4
+
 import pytest
 from fixtures.adapters import FailingAdapter, InterruptingAdapter, StubAdapter
+from sqlalchemy import select
 
 from app.core.accounting.pricing import build_pricing_table
 from app.core.accounting.usage_recorder import UsageRecorder
@@ -17,6 +21,7 @@ from app.core.exceptions import (
 from app.core.routing.router import build_router
 from app.core.routing.strategies import Candidate
 from app.infra.global_exceptions import ProviderNotAvailable
+from app.models.db.usage_record import Usage_Record
 from app.models.domain.chat import ChatRequest, ChatResponse, Message
 from app.models.domain.enums import FailoverPolicy, ProviderEnum
 from app.repositories.pricing_repo import load_pricing_rates
@@ -170,3 +175,66 @@ async def test_a_stream_interrupted_after_partial_output_bills_the_partial_usage
 
     assert [e.content for e in events] == ["par", "tial "]
     assert await usage_count() == 1
+
+
+# bookkeeping after the provider answered
+
+
+async def test_usage_is_priced_by_the_catalog_model_not_the_reported_snapshot(
+    db_session, seed_pricing, seed_api_key
+):
+    """OpenAI answers `gpt-4o` with a dated snapshot. Pricing must use the
+    catalog name the gateway asked for, and keep the reported one for audit.
+    """
+    gateway, registry = await build_gateway(db_session)
+    registry.register(OPENAI, StubAdapter(OPENAI, reported_model="gpt-4o-2024-08-06"))
+
+    response = await gateway.complete(request(), seed_api_key.id)
+
+    record = await db_session.scalar(select(Usage_Record))
+    assert response.model == "gpt-4o-2024-08-06"
+    assert record.model == "gpt-4o"
+    assert record.upstream_model == "gpt-4o-2024-08-06"
+    assert record.cost == Decimal("0.00011")
+
+
+async def test_a_pricing_failure_after_the_provider_answered_still_returns_the_response(
+    db_session, seed_api_key, usage_count
+):
+    """No rates loaded: pricing raises after the provider already billed. The
+    caller still gets its response; the missing record is ours to reconcile.
+    """
+    gateway, registry = await build_gateway(db_session)
+    registry.register(OPENAI, StubAdapter(OPENAI))
+
+    response = await gateway.complete(request(), seed_api_key.id)
+
+    assert response.provider is OPENAI
+    assert await usage_count() == 0
+
+
+async def test_a_failed_usage_insert_still_returns_the_response_and_keeps_the_session_usable(
+    db_session, seed_pricing, usage_count
+):
+    """An unknown api_key_id violates the FK on insert. The savepoint rolls back
+    only that insert, so the request's transaction is still usable afterwards.
+    """
+    gateway, registry = await build_gateway(db_session)
+    registry.register(OPENAI, StubAdapter(OPENAI))
+
+    response = await gateway.complete(request(), uuid4())
+
+    assert response.provider is OPENAI
+    assert await usage_count() == 0
+
+
+async def test_a_stream_whose_usage_insert_fails_still_delivers_the_terminal_response(
+    db_session, seed_pricing, usage_count
+):
+    gateway, registry = await build_gateway(db_session)
+    registry.register(OPENAI, StubAdapter(OPENAI, content="hello world"))
+
+    events = [event async for event in await gateway.stream(request(), uuid4())]
+
+    assert isinstance(events[-1], ChatResponse)
+    assert await usage_count() == 0

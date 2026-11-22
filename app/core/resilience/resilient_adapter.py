@@ -8,6 +8,7 @@ from app.core.adapters.base import ProviderAdapter
 from app.core.exceptions import (
     CircuitOpen,
     UpstreamAmbiguous,
+    UpstreamRejected,
     UpstreamStreamInterrupted,
 )
 from app.core.resilience.circuit_breaker import CircuitBreaker
@@ -50,6 +51,11 @@ class ResilientAdapter(ProviderAdapter):
             raise UpstreamAmbiguous(
                 f"{self._provider.value} timed out after {self._timeout_s}s"
             ) from exc
+
+        except UpstreamRejected:
+            # the provider answered, the caller's request was the problem.
+            await self._breaker.record_abort(generation)
+            raise
 
         except Exception:
             await self._breaker.record_failure(generation)
@@ -97,6 +103,9 @@ class ResilientAdapter(ProviderAdapter):
                     return
                 emitted_any = True
                 yield event
+        except UpstreamRejected:
+            await self._breaker.record_abort(generation)
+            raise
         except Exception:
             await self._breaker.record_failure(generation)
             raise

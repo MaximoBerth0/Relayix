@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.core.accounting.pricing import PricingTable
+from app.core.exceptions import PricingRateNotFound
 from app.core.routing.strategies import (
     Candidate,
     CostStrategy,
@@ -65,6 +67,19 @@ def validate_registry(
                 )
 
 
+def validate_pricing(catalog: dict[str, list[Candidate]], pricing: PricingTable) -> None:
+    """Fail fast if a catalog model has no rate in effect: never call a model we can't price"""
+    missing = []
+    for tier, candidates in catalog.items():
+        for candidate in candidates:
+            try:
+                pricing.get(candidate.provider, candidate.model)
+            except PricingRateNotFound:
+                missing.append(f"{tier}: {candidate.provider.value}/{candidate.model}")
+    if missing:
+        raise ValueError(f"catalog models with no pricing rate in effect: {', '.join(missing)}")
+
+
 class RoutingService:
     """Turns a routing key into an ordered list of candidates to try.
 each tier is ranked by its own strategy 
@@ -79,6 +94,10 @@ each tier is ranked by its own strategy
         self._catalog = catalog
         self._strategies = strategies
         self._default_strategy = default_strategy
+
+    @property
+    def catalog(self) -> dict[str, list[Candidate]]:
+        return self._catalog
 
     def candidates_for(self, model: str) -> list[Candidate]:
         """ranked candidates for a routing tier, best first.

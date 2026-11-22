@@ -26,6 +26,7 @@ class UsageRepo:
             api_key_id=record.api_key_id,
             provider=record.provider,
             model=record.model,
+            upstream_model=record.upstream_model,
             token_in=record.tokens_in,
             token_out=record.tokens_out,
             finish_reason=record.finish_reason,
@@ -33,8 +34,9 @@ class UsageRepo:
             request_id=record.request_id,
             created_at=record.created_at,
         )
-        self._session.add(row)
-        await self._session.flush()
+        # savepoint: a failed insert must not poison the request's transaction
+        async with self._session.begin_nested():
+            self._session.add(row)
 
     async def summary_by_api_key(
         self,
@@ -136,4 +138,5 @@ class UsageRepo:
             finish_reason=row.finish_reason,
             request_id=row.request_id,
             created_at=row.created_at,
+            upstream_model=row.upstream_model,
         )

@@ -13,6 +13,7 @@ from app.core.exceptions import (
     UpstreamAmbiguous,
     UpstreamStreamInterrupted,
     UpstreamUnavailable,
+    status_error,
 )
 from app.models.domain.chat import (
     ChatRequest,
@@ -67,15 +68,7 @@ class AnthropicAdapter(ProviderAdapter):
             raise UpstreamUnavailable(f"anthropic connection failed: {exc}") from exc
         
         except APIStatusError as exc:
-            # a 5xx may have happened after the model ran. a 4xx is a pre-execution
-            # rejection that never billed.
-            if exc.status_code >= 500:
-                raise UpstreamAmbiguous(
-                    f"anthropic server error {exc.status_code}: {exc}"
-                ) from exc
-            raise UpstreamUnavailable(
-                f"anthropic rejected request {exc.status_code}: {exc}"
-            ) from exc
+            raise status_error("anthropic", exc.status_code, exc.message) from exc
         
         except AnthropicError as exc:
             # unknown failure mode, be conservative and treat it as ambiguous.
@@ -149,13 +142,8 @@ class AnthropicAdapter(ProviderAdapter):
                 content_parts, tokens_in, tokens_out, request_id, model_name,
             )
         except APIStatusError as exc:
-            clean_error = (
-                UpstreamAmbiguous(f"anthropic server error {exc.status_code}: {exc}")
-                if exc.status_code >= 500
-                else UpstreamUnavailable(f"anthropic rejected request {exc.status_code}: {exc}")
-            )
             self._raise_stream_failure(
-                exc, clean_error, content_parts, tokens_in, tokens_out, request_id, model_name,
+                exc, status_error("anthropic", exc.status_code, exc.message), content_parts, tokens_in, tokens_out, request_id, model_name,
             )
         except AnthropicError as exc:
             self._raise_stream_failure(

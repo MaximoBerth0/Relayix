@@ -10,6 +10,7 @@ from fixtures.adapters import FailingAdapter
 from fixtures.factories import AUTH_HEADERS
 from sqlalchemy import select
 
+from app.core.accounting.pricing import build_pricing_table
 from app.core.exceptions import UpstreamAmbiguous, UpstreamUnavailable
 from app.main import app
 from app.models.db.usage_record import Usage_Record
@@ -136,4 +137,25 @@ async def test_exhausted_failover_preserves_an_earlier_ambiguity(
 
     # neither provider was called a second time, and nothing was billed.
     assert len(openai.calls) == 1
+    assert await usage_count() == 0
+
+
+async def test_a_bookkeeping_failure_returns_200_and_a_retry_replays_instead_of_billing_twice(
+    client, stub_openai, usage_count
+):
+    """The provider answers but pricing can't run (no rates loaded). The caller
+    still gets its 200, the key is stored as completed, and a retry with the
+    same key is a replay: the provider is never called a second time.
+    """
+    app.state.pricing = build_pricing_table([])
+    payload = {"model": "default", "messages": [{"role": "user", "content": "ping"}]}
+    headers = {**AUTH_HEADERS, "Idempotency-Key": "bookkeeping-1"}
+
+    first = await client.post("/v1/chat/completions", headers=headers, json=payload)
+    retry = await client.post("/v1/chat/completions", headers=headers, json=payload)
+
+    assert first.status_code == 200
+    assert retry.status_code == 200
+    assert retry.json() == first.json()
+    assert len(stub_openai.calls) == 1
     assert await usage_count() == 0

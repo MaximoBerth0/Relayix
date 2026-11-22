@@ -1,14 +1,21 @@
 """Tier resolution: turning a caller-facing routing key into an ordered list of
 concrete (provider, model) candidates"""
 
+import importlib.util
+from datetime import UTC, datetime
+from decimal import Decimal
+from pathlib import Path
+
 import pytest
 
+from app.core.accounting.pricing import build_pricing_table
 from app.core.routing.router import (
     DEFAULT_CATALOG,
     DEFAULT_PRIORITY,
     MODEL_REGISTRY,
     RoutingService,
     build_router,
+    validate_pricing,
     validate_registry,
 )
 from app.core.routing.strategies import (
@@ -21,6 +28,7 @@ from app.core.routing.strategies import (
 )
 from app.infra.global_exceptions import ProviderNotAvailable
 from app.models.domain.enums import ProviderEnum
+from app.models.domain.pricing_rate import PricingRate
 
 OPENAI = ProviderEnum.OPENAI
 ANTHROPIC = ProviderEnum.ANTHROPIC
@@ -184,6 +192,68 @@ def test_validate_registry_rejects_provider_mismatch():
 
 def test_validate_registry_accepts_an_empty_catalog():
     validate_registry({}, MODEL_REGISTRY)
+
+
+# validate_pricing
+
+
+def _rate(provider, model, effective_from=datetime(2020, 1, 1, tzinfo=UTC)) -> PricingRate:
+    return PricingRate.create(
+        provider=provider,
+        model=model,
+        price_per_1k_input=Decimal("0.001"),
+        price_per_1k_output=Decimal("0.002"),
+        effective_from=effective_from,
+    )
+
+
+def test_validate_pricing_accepts_a_catalog_whose_models_all_have_rates():
+    catalog = {"default": [Candidate(OPENAI, "gpt-4o"), Candidate(ANTHROPIC, "claude-sonnet-5")]}
+    pricing = build_pricing_table([_rate(OPENAI, "gpt-4o"), _rate(ANTHROPIC, "claude-sonnet-5")])
+
+    validate_pricing(catalog, pricing)
+
+
+def test_validate_pricing_names_every_model_without_a_rate():
+    catalog = {
+        "default": [Candidate(OPENAI, "gpt-4o"), Candidate(ANTHROPIC, "claude-sonnet-5")],
+        "low_cost": [Candidate(OPENAI, "gpt-4o-mini")],
+    }
+    pricing = build_pricing_table([_rate(OPENAI, "gpt-4o")])
+
+    with pytest.raises(ValueError, match="claude-sonnet-5.*gpt-4o-mini"):
+        validate_pricing(catalog, pricing)
+
+
+def test_validate_pricing_rejects_a_rate_that_is_not_in_effect_yet():
+    catalog = {"default": [Candidate(OPENAI, "gpt-4o")]}
+    pricing = build_pricing_table([_rate(OPENAI, "gpt-4o", datetime(2999, 1, 1, tzinfo=UTC))])
+
+    with pytest.raises(ValueError, match="gpt-4o"):
+        validate_pricing(catalog, pricing)
+
+
+def test_validate_pricing_rejects_a_rate_under_the_wrong_provider():
+    catalog = {"default": [Candidate(OPENAI, "gpt-4o")]}
+    pricing = build_pricing_table([_rate(ANTHROPIC, "gpt-4o")])
+
+    with pytest.raises(ValueError, match="gpt-4o"):
+        validate_pricing(catalog, pricing)
+
+
+def test_the_pricing_seed_migration_covers_the_default_catalog():
+    """Adding a catalog model without seeding its rate should break here, not
+    at the next deploy's startup.
+    """
+    path = Path(__file__).parents[3] / "alembic/versions/0003_seed_catalog_pricing.py"
+    spec = importlib.util.spec_from_file_location("seed_catalog_pricing", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    pricing = build_pricing_table(
+        _rate(ProviderEnum(provider), model) for provider, model, _, _ in migration.RATES
+    )
+    validate_pricing(DEFAULT_CATALOG, pricing)
 
 
 # Strategy ranking in isolation

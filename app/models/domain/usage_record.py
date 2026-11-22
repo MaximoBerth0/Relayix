@@ -17,6 +17,7 @@ class UsageRecord:
     finish_reason: str
     request_id: str
     created_at: datetime
+    upstream_model: str | None = None
 
     @classmethod
     def create(
@@ -29,6 +30,7 @@ class UsageRecord:
         cost: Decimal,
         finish_reason: str,
         request_id: str,
+        upstream_model: str | None = None,
     ) -> "UsageRecord":
         
         if tokens_in < 0 or tokens_out < 0:
@@ -50,4 +52,5 @@ class UsageRecord:
             finish_reason=finish_reason,
             request_id=request_id,
             created_at=datetime.now(timezone.utc),
+            upstream_model=upstream_model,
         )

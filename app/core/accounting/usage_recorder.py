@@ -22,11 +22,15 @@ class UsageRecorder:
         self._pricing = pricing
         self._repository = repository
 
-    async def record(self, api_key_id: UUID, response: ChatResponse) -> UsageRecord:
-        """Price the response, build a UsageRecord and persist it."""
+    async def record(self, api_key_id: UUID, response: ChatResponse, model: str) -> UsageRecord:
+        """Price the response by `model`, the catalog name the gateway asked for.
+
+        The provider may report a different name (OpenAI answers with dated
+        snapshots), so that one is only kept as `upstream_model`.
+        """
         cost = self._pricing.cost_for(
             provider=response.provider,
-            model=response.model,
+            model=model,
             tokens_in=response.tokens_in,
             tokens_out=response.tokens_out,
         )
@@ -34,12 +38,13 @@ class UsageRecorder:
         record = UsageRecord.create(
             api_key_id=api_key_id,
             provider=response.provider,
-            model=response.model,
+            model=model,
             tokens_in=response.tokens_in,
             tokens_out=response.tokens_out,
             cost=cost,
             finish_reason=response.finish_reason,
             request_id=response.request_id,
+            upstream_model=response.model,
         )
 
         await self._repository.save(record)

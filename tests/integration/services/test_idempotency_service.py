@@ -195,3 +195,28 @@ async def test_execute_stream_replays_a_completed_response_as_a_one_shot_stream(
     )
     replayed_events = [event async for event in replayed]
     assert replayed_events[-1] == RESPONSE
+
+
+class _CompleteFails(RedisIdempotencyStore):
+    async def complete(self, *args, **kwargs):
+        raise ConnectionError("redis went away")
+
+
+async def test_a_failure_storing_the_result_still_returns_the_response(redis_client):
+    """The operation already ran (and billed). Losing the stored result is
+    logged, never turned into an error for the caller.
+    """
+    store = _CompleteFails(
+        redis_client,
+        inflight_ttl_s=settings.idempotency_inflight_ttl_s,
+        completed_ttl_s=settings.idempotency_ttl_s,
+    )
+
+    async def operation():
+        return RESPONSE
+
+    response = await IdempotencyService(store).execute(
+        key="k-lost", api_key_id=uuid4(), request=REQUEST, operation=operation
+    )
+
+    assert response == RESPONSE

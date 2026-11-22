@@ -20,9 +20,16 @@ from app.models.domain.enums import ProviderEnum
 class StubAdapter(ProviderAdapter):
     """A ProviderAdapter that returns a canned response instead of calling out"""
 
-    def __init__(self, provider: ProviderEnum, content: str = "stubbed reply") -> None:
+    def __init__(
+        self,
+        provider: ProviderEnum,
+        content: str = "stubbed reply",
+        reported_model: str | None = None,
+    ) -> None:
         self._provider = provider
         self._content = content
+        # what the provider claims it ran, e.g. a dated snapshot; defaults to the requested model
+        self._reported_model = reported_model
         self.calls: list[ChatRequest] = []
 
     async def complete(self, request: ChatRequest) -> ChatResponse:
@@ -43,7 +50,7 @@ class StubAdapter(ProviderAdapter):
     def _response(self, request: ChatRequest) -> ChatResponse:
         return ChatResponse(
             provider=self._provider,
-            model=request.model,
+            model=self._reported_model or request.model,
             content=self._content,
             tokens_in=12,
             tokens_out=8,

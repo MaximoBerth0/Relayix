@@ -50,6 +50,7 @@ class UpstreamError(CoreError):
 
       - UpstreamUnavailable: the request provably never executed.
       - UpstreamAmbiguous:   the request may have executed (double-spend risk).
+      - UpstreamRejected:    the provider refused the caller's own request.
     """
 
     def __init__(
@@ -79,6 +80,31 @@ class UpstreamAmbiguous(UpstreamError):
 
     def __init__(self, message: str = "Upstream provider outcome unknown"):
         super().__init__(message=message, error_code="UPSTREAM_AMBIGUOUS")
+
+
+class UpstreamRejected(UpstreamError):
+    """The provider rejected the request because of its content (bad params, over
+    the context window, payload too large). Another provider would reject it too
+    and the provider itself is healthy, so it goes straight back to the caller with
+    the provider's status: no failover, no breaker failure."""
+
+    def __init__(self, status_code: int, message: str = "Upstream provider rejected the request"):
+        CoreError.__init__(
+            self,
+            message=message,
+            status_code=status_code,
+            error_code="UPSTREAM_REJECTED",
+        )
+
+
+def status_error(provider: str, status_code: int, detail: str) -> UpstreamError:
+    """A 5xx may have run and billed. A 4xx never billed: 400/413/422 are the
+    caller's fault, any other (401, 403, 404, 429) is ours and fails over."""
+    if status_code >= 500:
+        return UpstreamAmbiguous(f"{provider} server error {status_code}: {detail}")
+    if status_code in (400, 413, 422):
+        return UpstreamRejected(status_code, f"{provider} rejected the request: {detail}")
+    return UpstreamUnavailable(f"{provider} rejected request {status_code}: {detail}")
 
 
 class UpstreamStreamInterrupted(UpstreamAmbiguous):

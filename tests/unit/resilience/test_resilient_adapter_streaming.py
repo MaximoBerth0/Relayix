@@ -12,7 +12,11 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from app.core.exceptions import UpstreamAmbiguous, UpstreamStreamInterrupted
+from app.core.exceptions import (
+    UpstreamAmbiguous,
+    UpstreamRejected,
+    UpstreamStreamInterrupted,
+)
 from app.core.resilience.circuit_breaker import CircuitBreaker, CircuitState
 from app.core.resilience.resilient_adapter import ResilientAdapter
 from app.models.domain.chat import ChatRequest, ChatResponse, ChatStreamDelta, Message
@@ -155,3 +159,14 @@ async def test_client_disconnect_aborts_without_deciding_and_closes_the_inner_st
     assert breaker.state is CircuitState.CLOSED
     # the trial slot wasn't left dangling: a fresh CLOSED breaker still just allows.
     assert (await breaker.allow())[0] is True
+
+
+async def test_caller_rejection_before_any_delta_is_not_a_failure():
+    inner = ScriptedStreamAdapter([], error=UpstreamRejected(400, "context too long"))
+    adapter, breaker = make_resilient(inner)
+
+    for _ in range(3):
+        with pytest.raises(UpstreamRejected):
+            await drain(adapter)
+
+    assert breaker.state is CircuitState.CLOSED  # threshold is 2

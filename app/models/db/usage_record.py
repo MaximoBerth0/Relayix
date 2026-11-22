@@ -32,6 +32,9 @@ class Usage_Record(Base):
 
     model: Mapped[str] = mapped_column(String(255), nullable=False)
 
+    # the name the provider reported (e.g. a dated snapshot), kept for audit
+    upstream_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
     token_in: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     token_out: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

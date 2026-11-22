@@ -13,7 +13,7 @@ from app.core.exceptions import RateLimitExceeded
 from app.core.ratelimit.resilient import ResilientRateLimiter
 from app.core.ratelimit.token_bucket import InMemoryRateLimiter
 from app.core.resilience.circuit_breaker import CircuitBreaker
-from app.core.routing.router import build_router
+from app.core.routing.router import build_router, validate_pricing
 from app.infra.config import settings
 from app.infra.database.session import AsyncSessionLocal
 from app.infra.global_exceptions import AppError
@@ -37,6 +37,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     async with AsyncSessionLocal() as session:
         rates = await load_pricing_rates(session)
     app.state.pricing = build_pricing_table(rates)
+    validate_pricing(app.state.router.catalog, app.state.pricing)
 
     # rate limiting: Redis is the shared source of truth, the in-memory bucket is
     # the fallback, and a dedicated circuit breaker decides which one is in charge

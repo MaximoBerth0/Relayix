@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Protocol
 from uuid import UUID
@@ -22,6 +23,8 @@ from app.services.exceptions import (
     IdempotencyKeyConflict,
     IdempotencyOutcomeUnknown,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class IdempotencyStore(Protocol):
@@ -85,9 +88,7 @@ class IdempotencyService:
                 # the request probably never executed (or we were cancelled)
                 await self._store.release(api_key_id, key)
                 raise
-            await self._store.complete(
-                api_key_id, key, fingerprint, self._serialize(response)
-            )
+            await self._complete(api_key_id, key, fingerprint, response)
             return response
 
         # someone already claimed this key.
@@ -157,9 +158,7 @@ class IdempotencyService:
             async for event in primed:
                 yield event
                 if isinstance(event, ChatResponse):
-                    await self._store.complete(
-                        api_key_id, key, fingerprint, self._serialize(event)
-                    )
+                    await self._complete(api_key_id, key, fingerprint, event)
         except BaseException as exc:
             # a break here (provider error, client
             # disconnect, cancellation) is never safe to release for retry.
@@ -169,6 +168,22 @@ class IdempotencyService:
             raise
         finally:
             await primed.aclose()
+
+    async def _complete(
+        self, api_key_id: UUID, key: str, fingerprint: str, response: ChatResponse
+    ) -> None:
+        """Store the result, best effort: the provider already ran, so failing
+        here must not turn a served request into an error for the caller.
+        """
+        try:
+            await self._store.complete(
+                api_key_id, key, fingerprint, self._serialize(response)
+            )
+        except Exception:
+            logger.exception(
+                "idempotency completion failed after upstream billed",
+                extra={"api_key_id": str(api_key_id), "upstream_request_id": response.request_id},
+            )
 
     async def _replay_stream(self, body: dict) -> AsyncIterator[ChatStreamEvent]:
         """Re-serve a completed request's stored response as a one-shot stream."""

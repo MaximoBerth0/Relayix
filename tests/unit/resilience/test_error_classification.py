@@ -12,7 +12,13 @@ import asyncio
 
 import pytest
 
-from app.core.exceptions import CircuitOpen, UpstreamAmbiguous, UpstreamUnavailable
+from app.core.exceptions import (
+    CircuitOpen,
+    UpstreamAmbiguous,
+    UpstreamRejected,
+    UpstreamUnavailable,
+    status_error,
+)
 from app.core.resilience.circuit_breaker import CircuitBreaker, CircuitState
 from app.core.resilience.resilient_adapter import ResilientAdapter
 from app.models.domain.chat import ChatRequest, ChatResponse, Message
@@ -158,3 +164,54 @@ async def test_open_circuit_rejects_without_calling_the_inner_adapter():
         await adapter.complete(REQUEST)
 
     assert inner.calls == []
+
+
+async def test_a_caller_rejection_passes_through_without_counting_as_a_failure():
+    """A 400 the caller caused says nothing about the provider's health: one
+    buggy caller must not open the circuit for everyone else.
+    """
+    boom = UpstreamRejected(400, "context too long")
+    adapter, breaker = make_resilient(ScriptedAdapter(error=boom), fail_threshold=1)
+
+    for _ in range(3):
+        with pytest.raises(UpstreamRejected) as excinfo:
+            await adapter.complete(REQUEST)
+        assert excinfo.value is boom
+
+    assert breaker.state is CircuitState.CLOSED
+
+
+async def test_a_caller_rejection_releases_the_half_open_trial():
+    adapter, breaker = make_resilient(
+        ScriptedAdapter(error=UpstreamRejected(400)), fail_threshold=1
+    )
+    breaker._reset_timeout_s = 0
+    _, generation = await breaker.allow()
+    await breaker.record_failure(generation)
+
+    with pytest.raises(UpstreamRejected):
+        await adapter.complete(REQUEST)
+
+    assert breaker.state is CircuitState.HALF_OPEN
+    assert (await breaker.allow())[0] is True
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (400, UpstreamRejected),
+        (413, UpstreamRejected),
+        (422, UpstreamRejected),
+        (401, UpstreamUnavailable),
+        (403, UpstreamUnavailable),
+        (404, UpstreamUnavailable),
+        (429, UpstreamUnavailable),
+        (500, UpstreamAmbiguous),
+    ],
+)
+def test_status_error_splits_caller_4xx_from_ours(status, expected):
+    error = status_error("openai", status, "boom")
+
+    assert type(error) is expected
+    if expected is UpstreamRejected:
+        assert error.status_code == status

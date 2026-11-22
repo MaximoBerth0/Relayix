@@ -98,7 +98,7 @@ class GatewayService:
                     "upstream_request_id": response.request_id,
                 },
             )
-            await self._recorder.record(api_key_id, response)
+            await self._bill(api_key_id, response, candidate.model)
             return response
 
         # Every candidate was either unconfigured or failed.
@@ -189,7 +189,7 @@ class GatewayService:
                 raise
 
             # committed: this candidate has produced its first event.
-            return self._drain(stream_iter, first_event, api_key_id)
+            return self._drain(stream_iter, first_event, api_key_id, candidate.model)
 
         logger.error(
             "no candidate served the streamed request",
@@ -207,6 +207,7 @@ class GatewayService:
         stream_iter: AsyncIterator[ChatStreamEvent],
         first_event: ChatStreamEvent,
         api_key_id: UUID,
+        model: str,
     ) -> AsyncIterator[ChatStreamEvent]:
         """Forward events from an already-committed stream, billing once it
         reaches its terminal ChatResponse (cleanly or via a partial usage
@@ -227,7 +228,7 @@ class GatewayService:
                             "upstream_request_id": event.request_id,
                         },
                     )
-                    await self._recorder.record(api_key_id, event)
+                    await self._bill(api_key_id, event, model)
                     yield event
                     return
                 yield event
@@ -244,5 +245,26 @@ class GatewayService:
                     },
                     exc_info=exc,
                 )
-                await self._recorder.record(api_key_id, exc.partial)
+                await self._bill(api_key_id, exc.partial, model)
             raise
+
+    async def _bill(self, api_key_id: UUID, response: ChatResponse, model: str) -> None:
+        """Record usage without ever failing the caller: the provider already billed,
+        so a pricing or DB error here is ours to reconcile, not the caller's.
+        """
+        try:
+            await self._recorder.record(api_key_id, response, model)
+        except Exception:
+            logger.exception(
+                "usage record failed after upstream billed",
+                extra={
+                    "api_key_id": str(api_key_id),
+                    "provider": response.provider.value,
+                    "model": model,
+                    "upstream_model": response.model,
+                    "tokens_in": response.tokens_in,
+                    "tokens_out": response.tokens_out,
+                    "finish_reason": response.finish_reason,
+                    "upstream_request_id": response.request_id,
+                },
+            )

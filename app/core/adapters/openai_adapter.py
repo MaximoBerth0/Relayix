@@ -13,6 +13,7 @@ from app.core.exceptions import (
     UpstreamAmbiguous,
     UpstreamStreamInterrupted,
     UpstreamUnavailable,
+    status_error,
 )
 from app.models.domain.chat import (
     ChatRequest,
@@ -62,15 +63,7 @@ class OpenAIAdapter(ProviderAdapter):
             raise UpstreamUnavailable(f"openai connection failed: {exc}") from exc
         
         except APIStatusError as exc:
-            # a 5xx may have happened after the model ran. a 4xx is a pre-execution
-            # rejection that never billed.
-            if exc.status_code >= 500:
-                raise UpstreamAmbiguous(
-                    f"openai server error {exc.status_code}: {exc}"
-                ) from exc
-            raise UpstreamUnavailable(
-                f"openai rejected request {exc.status_code}: {exc}"
-            ) from exc
+            raise status_error("openai", exc.status_code, exc.message) from exc
         
         except OpenAIError as exc:
             # unknown failure mode: be conservative and treat it as ambiguous.
@@ -142,13 +135,8 @@ class OpenAIAdapter(ProviderAdapter):
                 content_parts, tokens_in, tokens_out, request_id, model_name,
             )
         except APIStatusError as exc:
-            clean_error = (
-                UpstreamAmbiguous(f"openai server error {exc.status_code}: {exc}")
-                if exc.status_code >= 500
-                else UpstreamUnavailable(f"openai rejected request {exc.status_code}: {exc}")
-            )
             self._raise_stream_failure(
-                exc, clean_error, content_parts, tokens_in, tokens_out, request_id, model_name,
+                exc, status_error("openai", exc.status_code, exc.message), content_parts, tokens_in, tokens_out, request_id, model_name,
             )
         except OpenAIError as exc:
             self._raise_stream_failure(
