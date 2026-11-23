@@ -21,3 +21,6 @@ class AnthropicCounter(TokenCounter):
 
         total += _TOKENS_PER_REPLY
         return total
+
+    def count_completion(self, model: str, content: str) -> int:
+        return math.ceil(len(content) / _CHARS_PER_TOKEN)

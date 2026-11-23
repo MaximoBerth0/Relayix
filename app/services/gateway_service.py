@@ -5,6 +5,7 @@ from uuid import UUID
 
 import anyio
 
+from app.core.accounting.registry import CounterRegistry
 from app.core.accounting.usage_recorder import UsageRecorder
 from app.core.adapters.registry import AdapterRegistry
 from app.core.exceptions import (
@@ -29,12 +30,14 @@ class GatewayService:
         router: RoutingService,
         recorder: UsageRecorder,
         detached_recorder: UsageRecorder,
+        counters: CounterRegistry,
     ) -> None:
         self._registry = registry
         self._router = router
         self._recorder = recorder
         # its own session: an abandoned stream can't rely on the request's transaction
         self._detached_recorder = detached_recorder
+        self._counters = counters
 
     async def complete(self, request: ChatRequest, api_key_id: UUID) -> ChatResponse:
 
@@ -195,7 +198,7 @@ class GatewayService:
                 raise
 
             # committed: this candidate has produced its first event.
-            return self._drain(stream_iter, first_event, api_key_id, candidate)
+            return self._drain(stream_iter, first_event, api_key_id, candidate, upstream)
 
         logger.error(
             "no candidate served the streamed request",
@@ -214,6 +217,7 @@ class GatewayService:
         first_event: ChatStreamEvent,
         api_key_id: UUID,
         candidate: Candidate,
+        request: ChatRequest,
     ) -> AsyncIterator[ChatStreamEvent]:
         """Forward events from an already-committed stream, billing once it
         reaches its terminal ChatResponse (cleanly or via a partial usage
@@ -250,26 +254,30 @@ class GatewayService:
                 event = await anext(stream_iter)
         except UpstreamStreamInterrupted as exc:
             if exc.partial is not None:
+                partial = self._estimate_missing_usage(exc.partial, request)
                 logger.warning(
                     "stream interrupted, billing partial usage",
                     extra={
-                        "model": exc.partial.model,
-                        "provider": exc.partial.provider.value,
-                        "tokens_in": exc.partial.tokens_in,
-                        "tokens_out": exc.partial.tokens_out,
+                        "model": partial.model,
+                        "provider": partial.provider.value,
+                        "tokens_in": partial.tokens_in,
+                        "tokens_out": partial.tokens_out,
+                        "tokens_estimated": partial.tokens_estimated,
                     },
                     exc_info=exc,
                 )
-                await self._bill(api_key_id, exc.partial, model)
+                await self._bill(api_key_id, partial, model)
                 billed = True
             raise
         finally:
             if not billed and forwarded:
-                await self._bill_abandoned(api_key_id, candidate, "".join(forwarded))
+                await self._bill_abandoned(api_key_id, candidate, request, "".join(forwarded))
 
-    async def _bill_abandoned(self, api_key_id: UUID, candidate: Candidate, content: str) -> None:
-        """Token counts only arrive with the terminal event, so they're unknown here
-        and recorded as 0. Shielded: the caller's task is usually being cancelled.
+    async def _bill_abandoned(
+        self, api_key_id: UUID, candidate: Candidate, request: ChatRequest, content: str
+    ) -> None:
+        """Token counts only arrive with the terminal event, so both are estimated.
+        Shielded: the caller's task is usually being cancelled.
         """
         partial = ChatResponse(
             provider=candidate.provider,
@@ -280,12 +288,42 @@ class GatewayService:
             finish_reason="error",
             request_id="",
         )
-        logger.warning(
-            "stream abandoned before its terminal event, recording partial usage",
-            extra={"provider": candidate.provider.value, "model": candidate.model},
-        )
         with anyio.CancelScope(shield=True):
+            partial = self._estimate_missing_usage(partial, request)
+            logger.warning(
+                "stream abandoned before its terminal event, recording partial usage",
+                extra={
+                    "provider": candidate.provider.value,
+                    "model": candidate.model,
+                    "tokens_in": partial.tokens_in,
+                    "tokens_out": partial.tokens_out,
+                },
+            )
             await self._bill(api_key_id, partial, candidate.model, self._detached_recorder)
+
+    def _estimate_missing_usage(self, partial: ChatResponse, request: ChatRequest) -> ChatResponse:
+        """Fill the counts a cut stream never received (OpenAI sends usage only in
+        its last chunk, Anthropic its output count only at the end) and flag them.
+
+        A prompt always has tokens and forwarded content always cost some, so a 0
+        here means unknown, not free. Best effort: a counter failure keeps the 0s.
+        """
+        tokens_in, tokens_out = partial.tokens_in, partial.tokens_out
+        if tokens_in and (tokens_out or not partial.content):
+            return partial
+        try:
+            counter = self._counters.get(partial.provider)
+            if not tokens_in:
+                tokens_in = counter.count(request)
+            if not tokens_out and partial.content:
+                tokens_out = counter.count_completion(request.model, partial.content)
+        except Exception:
+            logger.exception(
+                "token estimate failed, recording the partial with missing counts",
+                extra={"provider": partial.provider.value, "model": request.model},
+            )
+            return partial
+        return replace(partial, tokens_in=tokens_in, tokens_out=tokens_out, tokens_estimated=True)
 
     async def _bill(
         self,

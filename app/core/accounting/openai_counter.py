@@ -12,11 +12,7 @@ class OpenAICounter(TokenCounter):
     """Counts prompt tokens for OpenAI models using tiktoken."""
 
     def count(self, request: ChatRequest) -> int:
-        try:
-            enc = tiktoken.encoding_for_model(request.model)
-        except KeyError:
-            enc = tiktoken.get_encoding(_FALLBACK_ENCODING)
-
+        enc = _encoding_for(request.model)
         total = 0
         for message in request.messages:
             total += _TOKENS_PER_MESSAGE
@@ -25,3 +21,13 @@ class OpenAICounter(TokenCounter):
 
         total += _TOKENS_PER_REPLY
         return total
+
+    def count_completion(self, model: str, content: str) -> int:
+        return len(_encoding_for(model).encode(content))
+
+
+def _encoding_for(model: str) -> tiktoken.Encoding:
+    try:
+        return tiktoken.encoding_for_model(model)
+    except KeyError:
+        return tiktoken.get_encoding(_FALLBACK_ENCODING)

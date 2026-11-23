@@ -22,8 +22,12 @@ class UsageRepo:
         self._session = session
 
     async def save(self, record: UsageRecord) -> None:
-        """Persist the record; inserting the same record id twice is a no-op,
-        so a retry from the pending queue can never double count.
+        """Persist and commit the record; inserting the same record id twice is a
+        no-op, so a retry from the pending queue can never double count.
+
+        Commits here rather than in `get_session`: the provider already billed, so
+        the record must be durable before the caller's `try` ends, where a failed
+        commit can still be queued like a failed insert.
         """
         stmt = (
             insert(Usage_Record)
@@ -35,6 +39,7 @@ class UsageRepo:
                 upstream_model=record.upstream_model,
                 token_in=record.tokens_in,
                 token_out=record.tokens_out,
+                tokens_estimated=record.tokens_estimated,
                 finish_reason=record.finish_reason,
                 cost=record.cost,
                 request_id=record.request_id,
@@ -45,6 +50,12 @@ class UsageRepo:
         # savepoint: a failed insert must not poison the request's transaction
         async with self._session.begin_nested():
             await self._session.execute(stmt)
+        try:
+            await self._session.commit()
+        except Exception:
+            # a failed commit leaves the transaction dead, get_session's own commit would raise
+            await self._session.rollback()
+            raise
 
     async def summary_by_api_key(
         self,
@@ -152,8 +163,8 @@ class UsageRepo:
 
 
 class CommittingUsageRepo:
-    """Saves each record in its own session and commits it, for writes that
-    can't ride on a request's transaction: the retry worker, an abandoned stream.
+    """Saves each record in its own session, for writes that can't ride on a
+    request's session: the retry worker, an abandoned stream.
     """
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -162,4 +173,3 @@ class CommittingUsageRepo:
     async def save(self, record: UsageRecord) -> None:
         async with self._session_factory() as session:
             await UsageRepo(session).save(record)
-            await session.commit()

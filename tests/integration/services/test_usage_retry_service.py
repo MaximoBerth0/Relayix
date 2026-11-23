@@ -2,6 +2,8 @@
 worker side of usage inserts that failed in the request path.
 """
 
+import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
@@ -127,3 +129,25 @@ async def test_created_at_survives_the_queue_round_trip(redis_client):
 
     assert entry.record == record
     assert entry.record.created_at < datetime.now(UTC)
+
+
+async def test_the_estimated_flag_survives_the_queue_round_trip(redis_client):
+    queue = RedisUsageQueue(redis_client)
+    await queue.push(replace(make_record(uuid4()), tokens_estimated=True))
+
+    entry = await queue.claim(0.1)
+
+    assert entry.record.tokens_estimated is True
+
+
+async def test_an_entry_queued_before_the_estimated_flag_reads_as_reported(redis_client):
+    queue = RedisUsageQueue(redis_client)
+    await queue.push(make_record(uuid4()))
+    raw = await redis_client.rpop(PENDING_KEY)
+    body = json.loads(raw)
+    del body["tokens_estimated"]
+    await redis_client.lpush(PENDING_KEY, json.dumps(body))
+
+    entry = await queue.claim(0.1)
+
+    assert entry.record.tokens_estimated is False

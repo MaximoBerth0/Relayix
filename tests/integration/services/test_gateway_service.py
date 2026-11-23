@@ -3,6 +3,7 @@ failover policy, and usage billing, wired together against a real DB (no
 HTTP layer; provider calls are stubbed).
 """
 
+from dataclasses import replace
 from decimal import Decimal
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ from fixtures.adapters import FailingAdapter, InterruptingAdapter, StubAdapter
 from sqlalchemy import select
 
 from app.core.accounting.pricing import build_pricing_table
+from app.core.accounting.registry import build_registry as build_counter_registry
 from app.core.accounting.usage_recorder import UsageRecorder
 from app.core.adapters.registry import AdapterRegistry
 from app.core.exceptions import (
@@ -46,7 +48,8 @@ async def build_gateway(
     router = build_router(catalog=CATALOG)
     registry = AdapterRegistry()
     recorder = UsageRecorder(pricing, repository or UsageRepo(db_session), queue or PendingQueueSpy())
-    return GatewayService(registry, router, recorder, recorder), registry
+    gateway = GatewayService(registry, router, recorder, recorder, build_counter_registry())
+    return gateway, registry
 
 
 class PendingQueueSpy:
@@ -202,6 +205,81 @@ async def test_a_stream_interrupted_after_partial_output_bills_the_partial_usage
 
     assert [e.content for e in events] == ["par", "tial "]
     assert await usage_count() == 1
+    record = await db_session.scalar(select(Usage_Record))
+    assert (record.token_in, record.token_out) == (5, 1)
+    assert record.tokens_estimated is False
+
+
+async def test_a_stream_cut_before_its_usage_chunk_bills_estimated_counts(
+    db_session, seed_pricing, seed_api_key
+):
+    """OpenAI sends usage only in its last chunk, so a cut stream reports 0/0.
+    Both counts are estimated from the prompt and the forwarded content.
+    """
+    partial = ChatResponse(
+        provider=OPENAI,
+        model="gpt-4o",
+        content="partial ",
+        tokens_in=0,
+        tokens_out=0,
+        finish_reason="error",
+        request_id="partial",
+    )
+    gateway, registry = await build_gateway(db_session)
+    registry.register(
+        OPENAI,
+        InterruptingAdapter(OPENAI, UpstreamStreamInterrupted("broke", partial=partial)),
+    )
+
+    stream = await gateway.stream(request(), seed_api_key.id)
+    with pytest.raises(UpstreamStreamInterrupted):
+        async for _ in stream:
+            pass
+
+    counter = build_counter_registry().get(OPENAI)
+    record = await db_session.scalar(select(Usage_Record))
+    assert record.token_in == counter.count(replace(request(), model="gpt-4o"))
+    assert record.token_out == counter.count_completion("gpt-4o", "partial ")
+    assert record.token_out > 0
+    assert record.tokens_estimated is True
+    assert record.cost > 0
+
+
+async def test_a_cut_stream_keeps_the_input_count_the_provider_reported(
+    db_session, seed_pricing, seed_api_key
+):
+    """Anthropic reports input tokens at message_start but output only at the
+    end: the known count is kept, only the missing one is estimated.
+    """
+    partial = ChatResponse(
+        provider=ANTHROPIC,
+        model="claude-sonnet-5",
+        content="partial ",
+        tokens_in=42,
+        tokens_out=0,
+        finish_reason="error",
+        request_id="partial",
+    )
+    gateway, registry = await build_gateway(db_session)
+    registry.register(
+        OPENAI, FailingAdapter(UpstreamUnavailable("openai down"))
+    )
+    registry.register(
+        ANTHROPIC,
+        InterruptingAdapter(ANTHROPIC, UpstreamStreamInterrupted("broke", partial=partial)),
+    )
+
+    stream = await gateway.stream(request(), seed_api_key.id)
+    with pytest.raises(UpstreamStreamInterrupted):
+        async for _ in stream:
+            pass
+
+    record = await db_session.scalar(select(Usage_Record))
+    assert record.token_in == 42
+    assert record.token_out == build_counter_registry().get(ANTHROPIC).count_completion(
+        "claude-sonnet-5", "partial "
+    )
+    assert record.tokens_estimated is True
 
 
 async def test_a_stream_the_client_abandons_still_records_its_partial_usage(
@@ -221,6 +299,9 @@ async def test_a_stream_the_client_abandons_still_records_its_partial_usage(
     assert record.finish_reason == "error"
     assert record.provider == OPENAI
     assert record.model == "gpt-4o"
+    assert record.token_in > 0
+    assert record.token_out > 0
+    assert record.tokens_estimated is True
 
 
 async def test_partial_usage_is_recorded_even_while_the_task_is_cancelled(
@@ -307,6 +388,29 @@ async def test_a_failed_usage_insert_returns_the_response_and_queues_the_record(
     assert await usage_count() == 0
     assert len(queue.pushed) == 1
     assert queue.pushed[0].model == "gpt-4o"
+
+
+async def test_a_failed_usage_commit_returns_the_response_and_queues_the_record(
+    db_session, seed_pricing, seed_api_key, usage_count, monkeypatch
+):
+    """The insert succeeds but the commit fails (connection drop, deferred
+    constraint): the record is queued and the session is rolled back, still usable.
+    """
+
+    async def failing_commit():
+        raise ConnectionError("connection lost on commit")
+
+    queue = PendingQueueSpy()
+    gateway, registry = await build_gateway(db_session, queue=queue)
+    registry.register(OPENAI, StubAdapter(OPENAI))
+    monkeypatch.setattr(db_session, "commit", failing_commit)
+
+    response = await gateway.complete(request(), seed_api_key.id)
+
+    assert response.provider is OPENAI
+    assert len(queue.pushed) == 1
+    assert queue.pushed[0].api_key_id == seed_api_key.id
+    assert await usage_count() == 0
 
 
 async def test_a_stream_whose_usage_insert_fails_still_delivers_the_terminal_response(

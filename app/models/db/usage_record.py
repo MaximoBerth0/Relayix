@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 from app.infra.database.base import Base
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Uuid, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.domain.enums import ProviderEnum
 
@@ -38,6 +38,11 @@ class Usage_Record(Base):
     token_in: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     token_out: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # the provider never reported usage (stream cut short), counted locally instead
+    tokens_estimated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     finish_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
 

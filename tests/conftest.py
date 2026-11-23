@@ -37,6 +37,7 @@ import app.models.db.api_key
 import app.models.db.pricing
 import app.models.db.usage_record
 from app.core.accounting.pricing import build_pricing_table
+from app.core.accounting.registry import build_registry as build_counter_registry
 from app.core.adapters.registry import build_registry
 from app.core.ratelimit.resilient import ResilientRateLimiter
 from app.core.ratelimit.token_bucket import InMemoryRateLimiter
@@ -124,6 +125,7 @@ async def client(db_session, redis_client):
 
     app.state.registry = build_registry()
     app.state.router = build_router()
+    app.state.counters = build_counter_registry()
     app.state.pricing = build_pricing_table(await load_pricing_rates(db_session))
     app.state.redis = redis_client
     app.state.rate_limiter = ResilientRateLimiter(

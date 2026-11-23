@@ -26,6 +26,8 @@ class ChatResponse:
     tokens_out: int
     finish_reason: str
     request_id: str
+    # the provider never reported usage, the counts come from our token counters
+    tokens_estimated: bool = False
 
 
 @dataclass(frozen=True)

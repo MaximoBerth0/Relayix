@@ -69,6 +69,7 @@ def _encode(record: UsageRecord, attempts: int) -> bytes:
             "upstream_model": record.upstream_model,
             "tokens_in": record.tokens_in,
             "tokens_out": record.tokens_out,
+            "tokens_estimated": record.tokens_estimated,
             "cost": str(record.cost),
             "finish_reason": record.finish_reason,
             "request_id": record.request_id,
@@ -88,6 +89,8 @@ def _decode(raw: bytes) -> tuple[UsageRecord, int]:
         upstream_model=body["upstream_model"],
         tokens_in=body["tokens_in"],
         tokens_out=body["tokens_out"],
+        # entries queued before the flag existed were all provider-reported
+        tokens_estimated=body.get("tokens_estimated", False),
         cost=Decimal(body["cost"]),
         finish_reason=body["finish_reason"],
         request_id=body["request_id"],

@@ -128,3 +128,26 @@ def test_build_registry_wires_a_counter_for_every_provider():
 
     assert isinstance(registry.get(ProviderEnum.OPENAI), OpenAICounter)
     assert isinstance(registry.get(ProviderEnum.ANTHROPIC), AnthropicCounter)
+
+
+# count_completion: output tokens of a stream cut before the provider reported usage
+
+
+def test_openai_completion_count_is_the_tiktoken_length_of_the_content():
+    assert OpenAICounter().count_completion("gpt-4o", "hello world") == len(
+        _ENC.encode("hello world")
+    )
+
+
+def test_openai_completion_count_falls_back_for_an_unknown_model():
+    assert OpenAICounter().count_completion("not-a-model", "hello") == len(_ENC.encode("hello"))
+
+
+def test_anthropic_completion_count_rounds_characters_up_to_tokens():
+    # 8 chars / 3.5 -> ceil(2.29) = 3
+    assert AnthropicCounter().count_completion("claude-sonnet-5", "abcdefgh") == 3
+
+
+def test_an_empty_completion_counts_zero():
+    assert OpenAICounter().count_completion("gpt-4o", "") == 0
+    assert AnthropicCounter().count_completion("claude-sonnet-5", "") == 0

@@ -61,6 +61,7 @@ class UsageRecorder:
             finish_reason=response.finish_reason,
             request_id=response.request_id,
             upstream_model=response.model,
+            tokens_estimated=response.tokens_estimated,
         )
 
         try:

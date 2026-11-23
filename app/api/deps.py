@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.accounting.pricing import PricingTable
+from app.core.accounting.registry import CounterRegistry
 from app.core.accounting.usage_recorder import UsageRecorder
 from app.core.adapters.registry import AdapterRegistry
 from app.core.ratelimit.base import RateLimiter
@@ -36,6 +37,11 @@ async def get_registry(request: Request) -> AdapterRegistry:
 async def get_pricing_table(request: Request) -> PricingTable:
     """resolve the process-wide pricing table built during startup"""
     return request.app.state.pricing
+
+
+async def get_counters(request: Request) -> CounterRegistry:
+    """resolve the process-wide token counter registry built during startup"""
+    return request.app.state.counters
 
 
 async def get_router(request: Request) -> RoutingService:
@@ -67,9 +73,10 @@ async def get_gateway_service(
     router: RoutingService = Depends(get_router),
     recorder: UsageRecorder = Depends(get_usage_recorder),
     detached_recorder: UsageRecorder = Depends(get_detached_usage_recorder),
+    counters: CounterRegistry = Depends(get_counters),
 ) -> GatewayService:
-    """construct a GatewayService over the shared registry, router and recorders"""
-    return GatewayService(registry, router, recorder, detached_recorder)
+    """construct a GatewayService over the shared registry, router, recorders and counters"""
+    return GatewayService(registry, router, recorder, detached_recorder, counters)
 
 
 async def get_idempotency_service(request: Request) -> IdempotencyService:
