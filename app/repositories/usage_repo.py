@@ -5,7 +5,8 @@ from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models.db.usage_record import Usage_Record
 from app.models.domain.enums import ProviderEnum
@@ -21,22 +22,29 @@ class UsageRepo:
         self._session = session
 
     async def save(self, record: UsageRecord) -> None:
-        """Map the domain UsageRecord to its ORM row and persist it."""
-        row = Usage_Record(
-            api_key_id=record.api_key_id,
-            provider=record.provider,
-            model=record.model,
-            upstream_model=record.upstream_model,
-            token_in=record.tokens_in,
-            token_out=record.tokens_out,
-            finish_reason=record.finish_reason,
-            cost=record.cost,
-            request_id=record.request_id,
-            created_at=record.created_at,
+        """Persist the record; inserting the same record id twice is a no-op,
+        so a retry from the pending queue can never double count.
+        """
+        stmt = (
+            insert(Usage_Record)
+            .values(
+                id=record.id,
+                api_key_id=record.api_key_id,
+                provider=record.provider,
+                model=record.model,
+                upstream_model=record.upstream_model,
+                token_in=record.tokens_in,
+                token_out=record.tokens_out,
+                finish_reason=record.finish_reason,
+                cost=record.cost,
+                request_id=record.request_id,
+                created_at=record.created_at,
+            )
+            .on_conflict_do_nothing(index_elements=[Usage_Record.id])
         )
         # savepoint: a failed insert must not poison the request's transaction
         async with self._session.begin_nested():
-            self._session.add(row)
+            await self._session.execute(stmt)
 
     async def summary_by_api_key(
         self,
@@ -129,6 +137,7 @@ class UsageRepo:
     def _to_domain(row: Usage_Record) -> UsageRecord:
         """Map an ORM row back to its domain UsageRecord."""
         return UsageRecord(
+            id=row.id,
             api_key_id=row.api_key_id,
             provider=ProviderEnum(row.provider),
             model=row.model,
@@ -140,3 +149,17 @@ class UsageRepo:
             created_at=row.created_at,
             upstream_model=row.upstream_model,
         )
+
+
+class CommittingUsageRepo:
+    """Saves each record in its own session and commits it, for writes that
+    can't ride on a request's transaction: the retry worker, an abandoned stream.
+    """
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def save(self, record: UsageRecord) -> None:
+        async with self._session_factory() as session:
+            await UsageRepo(session).save(record)
+            await session.commit()

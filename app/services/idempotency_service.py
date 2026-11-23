@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Protocol
 from uuid import UUID
@@ -48,6 +49,10 @@ class IdempotencyStore(Protocol):
         """Park the record in a terminal ambiguous state (best effort)."""
         ...
 
+    async def refresh(self, api_key_id: UUID, key: str) -> None:
+        """Extend an in-flight claim while its request is still running."""
+        ...
+
     async def release(self, api_key_id: UUID, key: str) -> None:
         """Drop an in-flight claim so the caller can retry (best effort)."""
         ...
@@ -60,8 +65,10 @@ StreamOperation = Callable[[], Awaitable[AsyncIterator[ChatStreamEvent]]]
 class IdempotencyService:
     """Wraps an operation so it runs at most once per (api_key, idempotency key)"""
 
-    def __init__(self, store: IdempotencyStore) -> None:
+    def __init__(self, store: IdempotencyStore, *, refresh_every_s: float) -> None:
         self._store = store
+        # below the in-flight TTL: a stream outlives the TTL, so its claim is refreshed
+        self._refresh_every_s = refresh_every_s
 
     async def execute(
         self,
@@ -154,11 +161,15 @@ class IdempotencyService:
         api_key_id: UUID,
         fingerprint: str,
     ) -> AsyncIterator[ChatStreamEvent]:
+        last_refresh = time.monotonic()
         try:
             async for event in primed:
                 yield event
                 if isinstance(event, ChatResponse):
                     await self._complete(api_key_id, key, fingerprint, event)
+                elif time.monotonic() - last_refresh >= self._refresh_every_s:
+                    await self._refresh(api_key_id, key)
+                    last_refresh = time.monotonic()
         except BaseException as exc:
             # a break here (provider error, client
             # disconnect, cancellation) is never safe to release for retry.
@@ -168,6 +179,17 @@ class IdempotencyService:
             raise
         finally:
             await primed.aclose()
+
+    async def _refresh(self, api_key_id: UUID, key: str) -> None:
+        """Best effort: a lost refresh only reopens the window the TTL already had."""
+        try:
+            await self._store.refresh(api_key_id, key)
+        except Exception:
+            logger.warning(
+                "could not refresh in-flight idempotency claim",
+                extra={"api_key_id": str(api_key_id)},
+                exc_info=True,
+            )
 
     async def _complete(
         self, api_key_id: UUID, key: str, fingerprint: str, response: ChatResponse

@@ -347,16 +347,23 @@ Resources:
       Description: !Sub ${Project} private subnets
       SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
 
-  # no persistence needed, every key is a bucket or an idempotency record with a TTL
+  # Buckets and idempotency records expire on their own, but the usage retry
+  # queue (usage:pending/processing/dead) has no TTL and is the only copy of
+  # those records. A replica in the other AZ with automatic failover keeps it
+  # when the primary is replaced. Replication is async, so a push acked right
+  # before the primary dies can still be lost. default.redis7 evicts
+  # volatile-lru, so keys without a TTL (the queue) are never evicted.
   Redis:
     Type: AWS::ElastiCache::ReplicationGroup
     Properties:
       ReplicationGroupId: !Ref Project
-      ReplicationGroupDescription: !Sub ${Project} rate limiting and idempotency
+      ReplicationGroupDescription: !Sub ${Project} rate limiting, idempotency and the usage retry queue
       Engine: redis
       EngineVersion: "7.1"
       CacheNodeType: !Ref RedisNodeType
-      NumCacheClusters: 1
+      NumCacheClusters: 2
+      AutomaticFailoverEnabled: true
+      MultiAZEnabled: true
       Port: 6379
       CacheParameterGroupName: default.redis7
       CacheSubnetGroupName: !Ref RedisSubnetGroup
@@ -543,6 +550,12 @@ Resources:
       LogGroupName: !Sub /ecs/${Project}/otel-collector
       RetentionInDays: !Ref LogRetentionDays
 
+  WorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${Project}/usage-retry
+      RetentionInDays: !Ref LogRetentionDays
+
   MigrateLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -620,6 +633,47 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: otel
 
+  # persists the usage inserts the api queued in Redis (usage:pending).
+  # Cpu 0 reserves nothing: two api tasks already fill a t4g.medium's 2048 units,
+  # and this one mostly blocks on Redis. Pool of 2, it writes one record at a time.
+  WorkerTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${Project}-usage-retry
+      RequiresCompatibilities: [EC2]
+      NetworkMode: bridge
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      RuntimePlatform: { OperatingSystemFamily: LINUX, CpuArchitecture: ARM64 }
+      ContainerDefinitions:
+        - Name: usage-retry
+          Image: !Sub
+            - "${Repo}:${ImageTag}"
+            - Repo: { "Fn::ImportValue": !Sub "${BootstrapStackName}-RepositoryUri" }
+          Essential: true
+          Cpu: 0
+          MemoryReservation: 192
+          Memory: 384
+          Command: [python, -m, app.workers.usage_retry]
+          # SIGTERM stops the loop after the entry in hand; an entry cut mid-insert
+          # stays in usage:processing and is requeued on the next start
+          StopTimeout: 30
+          Environment:
+            - { Name: ENVIRONMENT, Value: production }
+            - { Name: DEBUG, Value: "false" }
+            - { Name: DB_SSL, Value: require }
+            - { Name: DB_POOL_SIZE, Value: "1" }
+            - { Name: DB_MAX_OVERFLOW, Value: "1" }
+          Secrets:
+            - { Name: DATABASE_URL, ValueFrom: !Sub "${ConnectionSecret}:DATABASE_URL::" }
+            - { Name: REDIS_URL, ValueFrom: !Sub "${ConnectionSecret}:REDIS_URL::" }
+            - { Name: ADMIN_API_TOKEN, ValueFrom: !Ref AdminTokenSecret }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref WorkerLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: usage-retry
+
   # one-off `alembic upgrade head`, run by deploy.sh before the service moves
   MigrateTaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -679,6 +733,25 @@ Resources:
         - ContainerName: api
           ContainerPort: 8000
           TargetGroupArn: !Ref TargetGroup
+      EnableECSManagedTags: true
+      PropagateTags: SERVICE
+
+  # one task is enough; an overlap during a deploy is safe, the insert dedupes on the record id
+  WorkerService:
+    Type: AWS::ECS::Service
+    Condition: ServiceEnabled
+    DependsOn: [ClusterCapacityProviders]
+    Properties:
+      ServiceName: !Sub ${Project}-usage-retry
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref WorkerTaskDefinition
+      DesiredCount: 1
+      CapacityProviderStrategy:
+        - { CapacityProvider: !Ref CapacityProvider, Weight: 1 }
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker: { Enable: true, Rollback: true }
       EnableECSManagedTags: true
       PropagateTags: SERVICE
 

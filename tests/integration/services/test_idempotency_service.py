@@ -11,7 +11,7 @@ import pytest
 from app.core.exceptions import UpstreamAmbiguous
 from app.infra.config import settings
 from app.infra.idempotency.redis_store import RedisIdempotencyStore
-from app.models.domain.chat import ChatRequest, ChatResponse, Message
+from app.models.domain.chat import ChatRequest, ChatResponse, ChatStreamDelta, Message
 from app.models.domain.enums import ProviderEnum
 from app.services.exceptions import (
     IdempotencyInProgress,
@@ -40,7 +40,7 @@ def service(redis_client) -> IdempotencyService:
         inflight_ttl_s=settings.idempotency_inflight_ttl_s,
         completed_ttl_s=settings.idempotency_ttl_s,
     )
-    return IdempotencyService(store)
+    return IdempotencyService(store, refresh_every_s=settings.idempotency_inflight_ttl_s / 3)
 
 
 async def test_a_fresh_key_executes_the_operation_exactly_once(redis_client):
@@ -197,6 +197,43 @@ async def test_execute_stream_replays_a_completed_response_as_a_one_shot_stream(
     assert replayed_events[-1] == RESPONSE
 
 
+async def test_a_long_stream_keeps_its_in_flight_claim(redis_client):
+    """The in-flight TTL is shorter than a stream may run: the claim is refreshed
+    while events flow, so a retry mid-stream is told to wait instead of re-running.
+    """
+    store = RedisIdempotencyStore(
+        redis_client,
+        inflight_ttl_s=settings.idempotency_inflight_ttl_s,
+        completed_ttl_s=settings.idempotency_ttl_s,
+    )
+    svc = IdempotencyService(store, refresh_every_s=0)
+    api_key_id = uuid4()
+    redis_key = f"idem:{api_key_id}:k-long"
+
+    async def make_stream():
+        async def gen():
+            yield ChatStreamDelta(content="hi ")
+            yield ChatStreamDelta(content="back")
+            yield RESPONSE
+
+        return gen()
+
+    primed = await svc.execute_stream(
+        key="k-long", api_key_id=api_key_id, request=REQUEST, operation=make_stream
+    )
+    await anext(primed)
+    # the claim is about to lapse, as it would minutes into a long stream
+    await redis_client.expire(redis_key, 1)
+    await anext(primed)
+
+    assert await redis_client.ttl(redis_key) > 1
+    with pytest.raises(IdempotencyInProgress):
+        await svc.execute_stream(
+            key="k-long", api_key_id=api_key_id, request=REQUEST, operation=make_stream
+        )
+    await primed.aclose()
+
+
 class _CompleteFails(RedisIdempotencyStore):
     async def complete(self, *args, **kwargs):
         raise ConnectionError("redis went away")
@@ -215,7 +252,9 @@ async def test_a_failure_storing_the_result_still_returns_the_response(redis_cli
     async def operation():
         return RESPONSE
 
-    response = await IdempotencyService(store).execute(
+    response = await IdempotencyService(
+        store, refresh_every_s=settings.idempotency_inflight_ttl_s / 3
+    ).execute(
         key="k-lost", api_key_id=uuid4(), request=REQUEST, operation=operation
     )
 

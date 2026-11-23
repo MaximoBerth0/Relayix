@@ -21,6 +21,9 @@ make down          # stop (keeps volumes)
 make logs
 make sh             # shell inside the api container
 
+# usage retry worker (separate process, persists usage inserts that failed)
+make worker
+
 # migrations (run inside the api container)
 make migrate
 make revision m="describe your change"
@@ -58,7 +61,9 @@ Infra       app/infra/*         config, DB session, Redis client, security, idem
 Request path — see `docs/system_flow.md` for the full diagrams:
 1. **Admission**: authenticate the API key, rate limit it, and — if an `Idempotency-Key` header was sent reserve or replay before any provider is touched.
 2. **Routing & failover**: resolve the tier to ranked `(provider, model)` candidates, skip unconfigured or circuit-open ones, call the first that's left under a hard timeout.
-3. Success is priced from the provider's real reported token counts (never the pre-flight estimate) and recorded as a `UsageRecord`.
+3. Success is priced from the provider's real reported token counts (never the pre-flight estimate), by the catalog model, and recorded as a `UsageRecord`. If that insert fails, the record goes to a Redis list and `app/workers/usage_retry.py` persists it later; the response is never failed for it.
+
+Startup refuses to boot if a catalog model has no pricing rate (`validate_pricing`), so adding a model to the catalog means adding its rate too (migration `0003` seeds the default catalog).
 
 ### Rules the code never bends
 
@@ -66,6 +71,7 @@ Request path — see `docs/system_flow.md` for the full diagrams:
 - An unavailable provider (never reached, or circuit open) always fails over safely. A *timeout* is ambiguous the request may have already executed and billed so failing over on timeout is gated by `failover_policy`, defaulting to `at_most_once` (no double-spend).
 - A completed idempotency key never re-runs the request; the same key with a different request body is a conflict (422), not a retry.
 - Money (usage cost) is computed from the provider's actual returned token counts, not the estimate used for pre-flight checks.
+- Once the provider has answered, bookkeeping (pricing, the usage insert, storing the idempotent response) never fails the caller's request and never releases its idempotency key.
 - Each provider has its own circuit breaker; one sick provider never blocks another.
 
 ## Testing

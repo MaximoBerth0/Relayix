@@ -4,7 +4,7 @@
 COMPOSE      := docker compose -f docker/docker-compose.yml
 COMPOSE_TEST := docker compose -f docker/docker-compose-test.yml
 
-.PHONY: up down logs reset run test-up test-down test migrate revision current heads
+.PHONY: up down logs reset run worker test-up test-down test migrate revision current heads
 
 ## backing services (db + redis)
 
@@ -25,6 +25,9 @@ logs:          ## Tail the backing services' logs
 run:           ## Apply migrations, then start uvicorn with --reload
 	poetry run alembic upgrade head
 	poetry run uvicorn app.main:app --reload
+
+worker:        ## Start the usage retry worker (persists usage inserts that failed)
+	poetry run python -m app.workers.usage_retry
 
 ## migrations (run on the host, against the backing Postgres)
 

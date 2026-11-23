@@ -82,6 +82,8 @@ The tier → strategy map keys on tier names, so a strategy is applied only when
 
 `validate_registry(catalog, registry)` runs at router construction and fails fast if the two disagree: every model a tier can route to must have a registry entry, and that entry's provider must match the catalog's. A misconfigured catalog raises `ValueError` here instead of erroring at request time.
 
+`validate_pricing(catalog, pricing)` is the same check against the pricing table. It runs at startup in `app/main.py`, once the table is loaded, and raises `ValueError` naming every catalog model with no rate in effect. A model the gateway can't price is never called: the process doesn't start. `RoutingService.catalog` exposes the catalog the service was built with, so startup validates exactly what will be routed.
+
 ## Builder
 
 ```python

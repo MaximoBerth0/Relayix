@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 from typing import Protocol
 from uuid import UUID
 
 from app.core.accounting.pricing import PricingTable
 from app.models.domain.chat import ChatResponse
 from app.models.domain.usage_record import UsageRecord
+
+logger = logging.getLogger(__name__)
 
 
 class UsageRepository(Protocol):
@@ -15,12 +18,25 @@ class UsageRepository(Protocol):
         ...
 
 
+class PendingUsageQueue(Protocol):
+    """Where a record goes when its insert fails, for the retry worker to persist."""
+
+    async def push(self, record: UsageRecord) -> None:
+        ...
+
+
 class UsageRecorder:
     """Turns a completed request into a priced, validated usage record and stores it."""
 
-    def __init__(self, pricing: PricingTable, repository: UsageRepository) -> None:
+    def __init__(
+        self,
+        pricing: PricingTable,
+        repository: UsageRepository,
+        pending: PendingUsageQueue,
+    ) -> None:
         self._pricing = pricing
         self._repository = repository
+        self._pending = pending
 
     async def record(self, api_key_id: UUID, response: ChatResponse, model: str) -> UsageRecord:
         """Price the response by `model`, the catalog name the gateway asked for.
@@ -47,5 +63,14 @@ class UsageRecorder:
             upstream_model=response.model,
         )
 
-        await self._repository.save(record)
+        try:
+            await self._repository.save(record)
+        except Exception:
+            # pricing and validation are deterministic, only the insert is worth retrying
+            logger.warning(
+                "usage insert failed, queued for retry",
+                extra={"usage_id": str(record.id), "upstream_request_id": record.request_id},
+                exc_info=True,
+            )
+            await self._pending.push(record)
         return record

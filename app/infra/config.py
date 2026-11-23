@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     # how long a completed response stays replayable for client retries (24h)
     idempotency_ttl_s: int = 86_400
 
+    # usage retry worker: failed usage inserts wait in Redis until it persists them
+    usage_retry_max_attempts: int = 10  # then the entry moves to usage:dead
+    usage_retry_backoff_s: float = 5.0  # pause after a failed attempt
+
     # consecutive failures before a provider is taken out of rotation (open).
     circuit_breaker_fail_threshold: int = 5
     # how long to stay open before a single test request is allowed (half-open).

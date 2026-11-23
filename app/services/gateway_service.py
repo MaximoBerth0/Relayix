@@ -3,6 +3,8 @@ from collections.abc import AsyncIterator
 from dataclasses import replace
 from uuid import UUID
 
+import anyio
+
 from app.core.accounting.usage_recorder import UsageRecorder
 from app.core.adapters.registry import AdapterRegistry
 from app.core.exceptions import (
@@ -12,6 +14,7 @@ from app.core.exceptions import (
     UpstreamUnavailable,
 )
 from app.core.routing.router import RoutingService
+from app.core.routing.strategies import Candidate
 from app.infra.global_exceptions import ProviderNotAvailable
 from app.models.domain.chat import ChatRequest, ChatResponse, ChatStreamEvent
 from app.models.domain.enums import FailoverPolicy
@@ -25,10 +28,13 @@ class GatewayService:
         registry: AdapterRegistry,
         router: RoutingService,
         recorder: UsageRecorder,
+        detached_recorder: UsageRecorder,
     ) -> None:
         self._registry = registry
         self._router = router
         self._recorder = recorder
+        # its own session: an abandoned stream can't rely on the request's transaction
+        self._detached_recorder = detached_recorder
 
     async def complete(self, request: ChatRequest, api_key_id: UUID) -> ChatResponse:
 
@@ -189,7 +195,7 @@ class GatewayService:
                 raise
 
             # committed: this candidate has produced its first event.
-            return self._drain(stream_iter, first_event, api_key_id, candidate.model)
+            return self._drain(stream_iter, first_event, api_key_id, candidate)
 
         logger.error(
             "no candidate served the streamed request",
@@ -207,12 +213,19 @@ class GatewayService:
         stream_iter: AsyncIterator[ChatStreamEvent],
         first_event: ChatStreamEvent,
         api_key_id: UUID,
-        model: str,
+        candidate: Candidate,
     ) -> AsyncIterator[ChatStreamEvent]:
         """Forward events from an already-committed stream, billing once it
         reaches its terminal ChatResponse (cleanly or via a partial usage
         record salvaged from a mid-stream interruption).
+
+        A stream that ends any other way (the client disconnected, the task was
+        cancelled) still had its tokens billed upstream, so what was forwarded
+        is recorded as an errored partial on the way out.
         """
+        model = candidate.model
+        forwarded: list[str] = []
+        billed = False
         try:
             event = first_event
             while True:
@@ -229,8 +242,10 @@ class GatewayService:
                         },
                     )
                     await self._bill(api_key_id, event, model)
+                    billed = True
                     yield event
                     return
+                forwarded.append(event.content)
                 yield event
                 event = await anext(stream_iter)
         except UpstreamStreamInterrupted as exc:
@@ -246,14 +261,44 @@ class GatewayService:
                     exc_info=exc,
                 )
                 await self._bill(api_key_id, exc.partial, model)
+                billed = True
             raise
+        finally:
+            if not billed and forwarded:
+                await self._bill_abandoned(api_key_id, candidate, "".join(forwarded))
 
-    async def _bill(self, api_key_id: UUID, response: ChatResponse, model: str) -> None:
+    async def _bill_abandoned(self, api_key_id: UUID, candidate: Candidate, content: str) -> None:
+        """Token counts only arrive with the terminal event, so they're unknown here
+        and recorded as 0. Shielded: the caller's task is usually being cancelled.
+        """
+        partial = ChatResponse(
+            provider=candidate.provider,
+            model=candidate.model,
+            content=content,
+            tokens_in=0,
+            tokens_out=0,
+            finish_reason="error",
+            request_id="",
+        )
+        logger.warning(
+            "stream abandoned before its terminal event, recording partial usage",
+            extra={"provider": candidate.provider.value, "model": candidate.model},
+        )
+        with anyio.CancelScope(shield=True):
+            await self._bill(api_key_id, partial, candidate.model, self._detached_recorder)
+
+    async def _bill(
+        self,
+        api_key_id: UUID,
+        response: ChatResponse,
+        model: str,
+        recorder: UsageRecorder | None = None,
+    ) -> None:
         """Record usage without ever failing the caller: the provider already billed,
         so a pricing or DB error here is ours to reconcile, not the caller's.
         """
         try:
-            await self._recorder.record(api_key_id, response, model)
+            await (recorder or self._recorder).record(api_key_id, response, model)
         except Exception:
             logger.exception(
                 "usage record failed after upstream billed",

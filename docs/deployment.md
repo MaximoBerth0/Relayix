@@ -31,7 +31,7 @@ flowchart LR
 | Container instances | ECS-optimized Amazon Linux 2023 arm64 AMI, `t4g.medium` by default, in an autoscaling group across two AZs |
 | Capacity provider | Managed scaling adds an instance when a task does not fit (a rolling deploy, a scale out), managed draining moves tasks off an instance before the ASG terminates it |
 | Postgres | RDS, encrypted, 7 days of backups, not publicly accessible. Snapshot on delete or replace |
-| Redis | ElastiCache, one node, TLS in transit (`rediss://`) and an auth token. No persistence: every key is a token bucket or an idempotency record with a TTL |
+| Redis | ElastiCache, one node, TLS in transit (`rediss://`) and an auth token. No persistence. Almost every key is a token bucket or an idempotency record with a TTL; the exception is the usage retry queue (`usage:pending`, `usage:processing`, `usage:dead`), which has no TTL and is lost if the node is replaced |
 
 ### Why no NAT gateway
 
@@ -80,6 +80,10 @@ Two tasks fit on one `t4g.medium` (2048 CPU units), which lets a rolling deploy 
 The Postgres connection ceiling is `tasks × WEB_CONCURRENCY × (DB_POOL_SIZE + DB_MAX_OVERFLOW)`, `2 × (3 + 2) = 10` per task. At `MaxTasks=3`, doubled during a rolling deploy, that is 60, under what a `db.t4g.micro` allows. Raise one side only with the other in mind.
 
 `RUN_MIGRATIONS=false`: the api never migrates on ECS, see below.
+
+### usage retry worker
+
+Not deployed yet: the stack has no service for `python -m app.workers.usage_retry`. Until it has one, a usage insert that fails in the request path waits in Redis and nothing persists it. It needs one task (a second `AWS::ECS::Service` on the same image and secrets, no load balancer, desired count 1) with a 30s stop timeout, so SIGTERM lets the current entry finish.
 
 ### migrate
 

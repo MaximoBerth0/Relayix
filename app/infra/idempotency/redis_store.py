@@ -130,6 +130,10 @@ class RedisIdempotencyStore:
                 extra={"api_key_id": str(api_key_id)},
             )
 
+    async def refresh(self, api_key_id: UUID, key: str) -> None:
+        """Push the in-flight claim's expiry forward, so a long stream keeps its key."""
+        await self._client.expire(self._key(api_key_id, key), self._inflight_ttl_s)
+
     async def release(self, api_key_id: UUID, key: str) -> None:
         try:
             await self._client.delete(self._key(api_key_id, key))

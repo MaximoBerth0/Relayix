@@ -1,7 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from datetime import datetime, timezone
-from uuid import UUID
+from uuid import UUID, uuid7
 from app.models.domain.enums import ProviderEnum, VALID_FINISH_REASONS
 from app.models.domain.exceptions import InvalidTokenQuantity, InvalidFinishReason, InvalidUsageCost
 
@@ -18,6 +18,8 @@ class UsageRecord:
     request_id: str
     created_at: datetime
     upstream_model: str | None = None
+    # assigned when the record is built, so a retried insert dedupes on it
+    id: UUID = field(default_factory=uuid7)
 
     @classmethod
     def create(

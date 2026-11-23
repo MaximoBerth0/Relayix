@@ -28,7 +28,15 @@ The Anthropic adapter also splits `system` messages out of the message list, bec
 
 ## Errors
 
-Any SDK-level failure (`OpenAIError`, `AnthropicError`) is caught and re-raised as `UpstreamError`. Nothing below this line leaks a provider SDK exception upward, which keeps the resilience layer able to reason about failures with one exception type.
+Any SDK-level failure (`OpenAIError`, `AnthropicError`) is caught and re-raised as a subclass of `UpstreamError`. Nothing below this line leaks a provider SDK exception upward. The subclass answers one question, "could the provider have run and billed this?", because that decides failover:
+
+| Error | Meaning | Raised for |
+|---|---|---|
+| `UpstreamUnavailable` | Provably never executed, always safe to fail over | connection errors, 401/403/404/429 |
+| `UpstreamAmbiguous` | May have executed and billed, failover gated by `failover_policy` | timeouts, 5xx, malformed responses |
+| `UpstreamRejected` | The caller's request is the problem, returned with the provider's status and message | 400, 413, 422 |
+
+`status_error()` in `app/core/exceptions.py` classifies every provider HTTP status once, for both adapters. `UpstreamRejected` never fails over (another provider would reject it too) and never counts against the breaker (the provider is healthy), so one caller sending bad requests can't take a provider out of rotation for everyone.
 
 ## Registry and wiring
 

@@ -17,15 +17,17 @@ flowchart LR
     B -- response --> A
     B -- request --> G[AI Provider]
     G -- response --> B
-    B <--> R[("Redis<br/>rate limit + idempotency")]
+    B <--> R[("Redis<br/>rate limit + idempotency<br/>+ usage retry queue")]
     B --> D[("Postgres<br/>api_keys + usage_records")]
+    W[Usage retry worker] --> R
+    W --> D
 ```
 
 ## Features
 
 - **Multi-provider routing** — requests are routed across configured providers based on availability and strategy.
 - **Circuit-breaker failover** — unhealthy providers are automatically taken out of rotation and periodically re-tested, so an outage on one provider doesn't fail requests for your users.
-- **Token-based cost accounting** — token usage and cost are recorded per request, queryable after the fact.
+- **Token-based cost accounting** — token usage and cost are recorded per request, queryable after the fact. A failed usage insert never fails the response: it is queued in Redis and a retry worker persists it.
 - **Rate limiting** — requests are throttled per API key before they reach a provider, backed by Redis with an in-memory fallback if Redis is unreachable.
 - **Idempotency** — send an `Idempotency-Key` header and a retried request replays the stored response instead of hitting a provider again.
 - **Streaming** — `stream: true` returns the completion as Server-Sent Events.
@@ -35,7 +37,7 @@ flowchart LR
 - **Python** / **FastAPI** — async HTTP delivery layer.
 - **SQLAlchemy** / **asyncpg** — ORM and persistence.
 - **Alembic** — database schema migrations.
-- **Redis** — rate limiting and idempotency.
+- **Redis** — rate limiting, idempotency and the usage retry queue.
 - **Docker** — containerized build and deployment.
 - **AWS** (ECS on EC2, RDS, ElastiCache, CloudFormation): production infrastructure.
 
@@ -46,6 +48,7 @@ cp .env.example .env       # fill in provider keys and ADMIN_API_TOKEN
 poetry install
 make up                    # Postgres + Redis in Docker
 make run                   # migrations, then uvicorn --reload on the host
+make worker                # usage retry worker, in a second terminal
 ```
 
 See `Makefile` for the rest (`make test`, `make migrate`, `make revision`, ...).
@@ -97,7 +100,10 @@ relayix/
 │   │   ├── security/      # crypto / hashing helpers
 │   │   ├── database/      # engine, session and ORM base
 │   │   ├── ratelimit/     # Redis client and Redis-backed limiter
-│   │   └── idempotency/   # Redis-backed idempotency store
+│   │   ├── idempotency/   # Redis-backed idempotency store
+│   │   └── usage_queue/   # Redis-backed queue of usage inserts to retry
+│   │
+│   ├── workers/           # long-lived processes next to the API (usage retry)
 │   │
 │   └── observability/     # logging and OpenTelemetry tracing
 │

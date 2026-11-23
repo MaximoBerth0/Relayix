@@ -6,14 +6,15 @@ unhealthy, enforces per-key rate limits, and records token-based cost per reques
 
 ## Where to read more
 
-- **The request path, step by step:** [system_flow.md](system_flow.md) — admission
-  (auth, rate limit, idempotency) then routing & failover, as two diagrams.
+- **The request path, step by step:** [system_flow.md](system_flow.md): startup
+  validation, admission (auth, rate limit, idempotency), routing & failover, and the
+  usage retry worker.
 - **Per module, in depth:**
   [routing](core/routing.md) ·
   [adapters](core/adapters.md) ·
   [resilience](core/resilience.md) (circuit breaker) ·
   [ratelimit](core/ratelimit.md) ·
-  [accounting](core/accounting.md) (tokens, pricing, usage)
+  [accounting](core/accounting.md) (tokens, pricing, usage, retry worker)
 - **How it runs in production:** [deployment.md](deployment.md): AWS ECS on EC2,
   the CloudFormation stacks and the release flow.
 
@@ -25,12 +26,21 @@ Services    app/services/*    orchestrate core modules into the request pipeline
 Core        app/core/*        provider-agnostic logic: routing, adapters, resilience,
                                ratelimit, accounting — no HTTP, no DB
 Repos       app/repositories/*  persistence for api keys, usage, pricing
-Infra       app/infra/*       config, DB session, Redis client, security, idempotency
+Infra       app/infra/*       config, DB session, Redis client, security, idempotency,
+                               usage retry queue
+Workers     app/workers/*     long-lived processes next to the API (usage retry)
 ```
 
 `app/main.py` wires it all together at startup (adapter registry, router, pricing
 table, resilient rate limiter) and holds them on `app.state` for the lifetime of the
-process.
+process. Startup fails if any catalog model has no pricing rate in effect.
+
+## Processes
+
+| Process | Command | What it does |
+|---|---|---|
+| API | `uvicorn app.main:app` (`make run`) | Serves every endpoint below |
+| Usage retry worker | `python -m app.workers.usage_retry` (`make worker`) | Persists usage records whose insert failed in the request path, see [accounting](core/accounting.md#retry-worker) |
 
 ## Endpoints
 
@@ -66,6 +76,10 @@ the codebase reads `os.environ` directly.
   double-spend. A provider that was never reached (unavailable, circuit open) always
   fails over safely.
 - Usage is priced from the provider's real reported token counts, never the
-  pre-flight estimate.
+  pre-flight estimate, and by the catalog model, never the name the provider reports.
+- A model with no pricing rate is never called: startup refuses to boot.
+- Once the provider has answered, bookkeeping never fails the response: a failed
+  usage insert is queued for the retry worker, and the idempotency key is never
+  released for a request that ran.
 - Each provider has its own circuit breaker; one sick provider never blocks the
   others.

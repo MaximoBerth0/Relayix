@@ -14,13 +14,14 @@ from app.core.adapters.registry import AdapterRegistry
 from app.core.ratelimit.base import RateLimiter
 from app.core.routing.router import RoutingService
 from app.infra.config import settings
-from app.infra.database.session import get_session
+from app.infra.database.session import AsyncSessionLocal, get_session
 from app.infra.global_exceptions import Unauthorized
 from app.infra.idempotency.redis_store import RedisIdempotencyStore
 from app.infra.security.crypto import hash_api_key
+from app.infra.usage_queue.redis_queue import RedisUsageQueue
 from app.models.db.api_key import Api_Key
 from app.repositories.api_key_repo import ApiKeyRepo
-from app.repositories.usage_repo import UsageRepo
+from app.repositories.usage_repo import CommittingUsageRepo, UsageRepo
 from app.services.api_key_service import ApiKeyService
 from app.services.gateway_service import GatewayService
 from app.services.idempotency_service import IdempotencyService
@@ -43,20 +44,32 @@ async def get_router(request: Request) -> RoutingService:
 
 
 async def get_usage_recorder(
+    request: Request,
     pricing: PricingTable = Depends(get_pricing_table),
     session: AsyncSession = Depends(get_session),
 ) -> UsageRecorder:
     """construct a request-scoped UsageRecorder over the current DB session"""
-    return UsageRecorder(pricing, UsageRepo(session))
+    return UsageRecorder(pricing, UsageRepo(session), RedisUsageQueue(request.app.state.redis))
+
+
+async def get_detached_usage_recorder(
+    request: Request,
+    pricing: PricingTable = Depends(get_pricing_table),
+) -> UsageRecorder:
+    """a UsageRecorder that commits on its own session, for streams the client abandoned"""
+    return UsageRecorder(
+        pricing, CommittingUsageRepo(AsyncSessionLocal), RedisUsageQueue(request.app.state.redis)
+    )
 
 
 async def get_gateway_service(
     registry: AdapterRegistry = Depends(get_registry),
     router: RoutingService = Depends(get_router),
     recorder: UsageRecorder = Depends(get_usage_recorder),
+    detached_recorder: UsageRecorder = Depends(get_detached_usage_recorder),
 ) -> GatewayService:
-    """construct a GatewayService over the shared registry, router and recorder"""
-    return GatewayService(registry, router, recorder)
+    """construct a GatewayService over the shared registry, router and recorders"""
+    return GatewayService(registry, router, recorder, detached_recorder)
 
 
 async def get_idempotency_service(request: Request) -> IdempotencyService:
@@ -66,7 +79,7 @@ async def get_idempotency_service(request: Request) -> IdempotencyService:
         inflight_ttl_s=settings.idempotency_inflight_ttl_s,
         completed_ttl_s=settings.idempotency_ttl_s,
     )
-    return IdempotencyService(store)
+    return IdempotencyService(store, refresh_every_s=settings.idempotency_inflight_ttl_s / 3)
 
 
 async def get_current_api_key(
