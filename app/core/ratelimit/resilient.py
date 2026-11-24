@@ -23,22 +23,38 @@ class ResilientRateLimiter:
         self._fallback = fallback
         self._breaker = breaker
 
-    async def check(self, key: UUID, rpm: int) -> None:
+    async def check(self, key: UUID, per_minute: int, cost: float = 1.0) -> None:
         allowed, generation = await self._breaker.allow()
         if not allowed:
-            await self._fallback.check(key, rpm)
+            await self._fallback.check(key, per_minute, cost)
             return
 
         try:
-            await self._primary.check(key, rpm)
+            await self._primary.check(key, per_minute, cost)
         except RateLimitExceeded:
             await self._breaker.record_success(generation)
             raise
         except RateLimiterUnavailable as exc:
             await self._breaker.record_failure(generation)
             logger.warning("redis rate limiter unavailable, using in-memory fallback", exc_info=exc)
-            await self._fallback.check(key, rpm)
+            await self._fallback.check(key, per_minute, cost)
             return
 
         # redis allowed the request
+        await self._breaker.record_success(generation)
+
+    async def charge(self, key: UUID, per_minute: int, cost: float) -> None:
+        allowed, generation = await self._breaker.allow()
+        if not allowed:
+            await self._fallback.charge(key, per_minute, cost)
+            return
+
+        try:
+            await self._primary.charge(key, per_minute, cost)
+        except RateLimiterUnavailable as exc:
+            await self._breaker.record_failure(generation)
+            logger.warning("redis rate limiter unavailable, charging the in-memory fallback", exc_info=exc)
+            await self._fallback.charge(key, per_minute, cost)
+            return
+
         await self._breaker.record_success(generation)

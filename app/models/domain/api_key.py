@@ -14,6 +14,7 @@ class ApiKey:
     key_hash: str
     name: str
     rate_limit_rpm: int | None
+    rate_limit_tpm: int | None
     monthly_token_quota: int | None
     is_active: bool
     created_at: datetime
@@ -24,6 +25,7 @@ class ApiKey:
         key_hash: str,
         name: str,
         rate_limit_rpm: int | None = None,
+        rate_limit_tpm: int | None = None,
         monthly_token_quota: int | None = None,
     ) -> "ApiKey":
 
@@ -36,6 +38,9 @@ class ApiKey:
         if rate_limit_rpm is not None and rate_limit_rpm <= 0:
             raise InvalidRateLimit()
 
+        if rate_limit_tpm is not None and rate_limit_tpm <= 0:
+            raise InvalidRateLimit()
+
         if monthly_token_quota is not None and monthly_token_quota <= 0:
             raise InvalidTokenQuota()
 
@@ -44,6 +49,7 @@ class ApiKey:
             key_hash=key_hash,
             name=name,
             rate_limit_rpm=rate_limit_rpm,
+            rate_limit_tpm=rate_limit_tpm,
             monthly_token_quota=monthly_token_quota,
             is_active=True,
             created_at=datetime.now(timezone.utc),

@@ -18,6 +18,7 @@ from app.infra.config import settings
 from app.infra.database.session import AsyncSessionLocal, get_session
 from app.infra.global_exceptions import Unauthorized
 from app.infra.idempotency.redis_store import RedisIdempotencyStore
+from app.infra.quota.redis_quota import RedisTokenQuota
 from app.infra.security.crypto import hash_api_key
 from app.infra.usage_queue.redis_queue import RedisUsageQueue
 from app.models.db.api_key import Api_Key
@@ -26,6 +27,7 @@ from app.repositories.usage_repo import CommittingUsageRepo, UsageRepo
 from app.services.api_key_service import ApiKeyService
 from app.services.gateway_service import GatewayService
 from app.services.idempotency_service import IdempotencyService
+from app.services.token_budget_service import TokenBudgetService
 from app.services.usage_service import UsageService
 
 
@@ -68,17 +70,6 @@ async def get_detached_usage_recorder(
     )
 
 
-async def get_gateway_service(
-    registry: AdapterRegistry = Depends(get_registry),
-    router: RoutingService = Depends(get_router),
-    recorder: UsageRecorder = Depends(get_usage_recorder),
-    detached_recorder: UsageRecorder = Depends(get_detached_usage_recorder),
-    counters: CounterRegistry = Depends(get_counters),
-) -> GatewayService:
-    """construct a GatewayService over the shared registry, router, recorders and counters"""
-    return GatewayService(registry, router, recorder, detached_recorder, counters)
-
-
 async def get_idempotency_service(request: Request) -> IdempotencyService:
     """construct an IdempotencyService over the shared Redis client"""
     store = RedisIdempotencyStore(
@@ -114,6 +105,38 @@ async def get_current_api_key(
         raise Unauthorized()
 
     return api_key
+
+
+async def get_token_budget_service(
+    request: Request,
+    api_key: Api_Key = Depends(get_current_api_key),
+    router: RoutingService = Depends(get_router),
+    counters: CounterRegistry = Depends(get_counters),
+    session: AsyncSession = Depends(get_session),
+) -> TokenBudgetService:
+    """the caller's token budget, one instance per request shared by the route and the gateway"""
+    return TokenBudgetService(
+        api_key_id=api_key.id,
+        tokens_per_minute=api_key.rate_limit_tpm or settings.default_rate_limit_tpm,
+        monthly_quota=api_key.monthly_token_quota,
+        limiter=request.app.state.token_limiter,
+        quota=RedisTokenQuota(request.app.state.redis),
+        usage=UsageRepo(session),
+        router=router,
+        counters=counters,
+    )
+
+
+async def get_gateway_service(
+    registry: AdapterRegistry = Depends(get_registry),
+    router: RoutingService = Depends(get_router),
+    recorder: UsageRecorder = Depends(get_usage_recorder),
+    detached_recorder: UsageRecorder = Depends(get_detached_usage_recorder),
+    counters: CounterRegistry = Depends(get_counters),
+    budget: TokenBudgetService = Depends(get_token_budget_service),
+) -> GatewayService:
+    """construct a GatewayService over the shared registry, router, recorders, counters and budget"""
+    return GatewayService(registry, router, recorder, detached_recorder, counters, budget)
 
 
 async def get_usage_service(

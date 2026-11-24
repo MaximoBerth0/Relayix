@@ -147,6 +147,14 @@ class RateLimitExceeded(CoreError):
         return body
 
 
+class TokenQuotaExceeded(RateLimitExceeded):
+    """The key spent its monthly token quota; `retry_after_s` points at next month."""
+
+    def __init__(self, retry_after_s: float, message: str = "Monthly token quota exceeded"):
+        super().__init__(retry_after_s=retry_after_s, message=message)
+        self.error_code = "TOKEN_QUOTA_EXCEEDED"
+
+
 class RateLimiterUnavailable(CoreError):
     """Internal signal, a limiter backend could not be reached.
     """

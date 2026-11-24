@@ -85,6 +85,13 @@ class UsageRepo:
             until=until,
         )
 
+    async def tokens_since(self, api_key_id: UUID, since: datetime) -> int:
+        """input + output tokens recorded for one api key since `since`."""
+        stmt = select(
+            func.coalesce(func.sum(Usage_Record.token_in + Usage_Record.token_out), 0)
+        ).where(Usage_Record.api_key_id == api_key_id, Usage_Record.created_at >= since)
+        return int(await self._session.scalar(stmt))
+
     async def list_by_api_key(
         self,
         api_key_id: UUID,

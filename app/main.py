@@ -53,6 +53,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             reset_timeout_s=settings.ratelimit_breaker_reset_timeout_s,
         ),
     )
+    app.state.token_limiter = ResilientRateLimiter(
+        primary=RedisRateLimiter(redis_client, namespace="ratelimit:tpm"),
+        fallback=InMemoryRateLimiter(),
+        breaker=CircuitBreaker(
+            fail_threshold=settings.ratelimit_breaker_fail_threshold,
+            reset_timeout_s=settings.ratelimit_breaker_reset_timeout_s,
+        ),
+    )
 
     try:
         yield

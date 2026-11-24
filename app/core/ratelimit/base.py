@@ -10,11 +10,17 @@ from uuid import UUID
 
 
 class RateLimiter(Protocol):
-    """One method: decide whether this key may make one more request.
+    """A token bucket per key that refills `per_minute` units every minute.
 
-    `check` is pass-or-raise. It returns None when the request is allowed and
-    raises `RateLimitExceeded` when it is not. `rpm` is the caller's own limit
-    (requests per minute), resolved from the api key at the call site.
+    `check` is pass-or-raise: it spends `cost` units and returns None, or raises
+    `RateLimitExceeded` when the bucket can't cover it. A cost larger than the
+    whole bucket passes only when the bucket is full, so it can never deadlock.
+
+    `charge` always applies: a positive cost spends (the bucket may go negative,
+    which delays the next requests), a negative one refunds. It is how a cost
+    estimated at admission is corrected once the real one is known.
     """
 
-    async def check(self, key: UUID, rpm: int) -> None: ...
+    async def check(self, key: UUID, per_minute: int, cost: float = 1.0) -> None: ...
+
+    async def charge(self, key: UUID, per_minute: int, cost: float) -> None: ...

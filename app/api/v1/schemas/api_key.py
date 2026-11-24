@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 class ApiKeyCreateRequestSchema(BaseModel):
     name: str = Field(min_length=1)
     rate_limit_rpm: int | None = Field(default=None, gt=0)
+    rate_limit_tpm: int | None = Field(default=None, gt=0)
     monthly_token_quota: int | None = Field(default=None, gt=0)
 
 
@@ -22,6 +23,7 @@ class ApiKeySchema(BaseModel):
     id: UUID
     name: str
     rate_limit_rpm: int | None
+    rate_limit_tpm: int | None
     monthly_token_quota: int | None
     is_active: bool
     created_at: datetime
@@ -32,6 +34,7 @@ class ApiKeySchema(BaseModel):
             id=api_key.id,
             name=api_key.name,
             rate_limit_rpm=api_key.rate_limit_rpm,
+            rate_limit_tpm=api_key.rate_limit_tpm,
             monthly_token_quota=api_key.monthly_token_quota,
             is_active=api_key.is_active,
             created_at=api_key.created_at,
@@ -47,6 +50,7 @@ class ApiKeyCreateResponseSchema(ApiKeySchema):
             id=api_key.id,
             name=api_key.name,
             rate_limit_rpm=api_key.rate_limit_rpm,
+            rate_limit_tpm=api_key.rate_limit_tpm,
             monthly_token_quota=api_key.monthly_token_quota,
             is_active=api_key.is_active,
             created_at=api_key.created_at,

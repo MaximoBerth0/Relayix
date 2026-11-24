@@ -31,7 +31,7 @@ flowchart LR
 | Container instances | ECS-optimized Amazon Linux 2023 arm64 AMI, `t4g.medium` by default, in an autoscaling group across two AZs |
 | Capacity provider | Managed scaling adds an instance when a task does not fit (a rolling deploy, a scale out), managed draining moves tasks off an instance before the ASG terminates it |
 | Postgres | RDS, encrypted, 7 days of backups, not publicly accessible. Snapshot on delete or replace |
-| Redis | ElastiCache, one node, TLS in transit (`rediss://`) and an auth token. No persistence. Almost every key is a token bucket or an idempotency record with a TTL; the exception is the usage retry queue (`usage:pending`, `usage:processing`, `usage:dead`), which has no TTL and is lost if the node is replaced |
+| Redis | ElastiCache, one node, TLS in transit (`rediss://`) and an auth token. No persistence. Almost every key is a token bucket, an idempotency record or a monthly token counter with a TTL (a lost counter is rebuilt from Postgres); the exception is the usage retry queue (`usage:pending`, `usage:processing`, `usage:dead`), which has no TTL and is lost if the node is replaced |
 
 ### Why no NAT gateway
 

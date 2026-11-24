@@ -2,18 +2,19 @@
 
 One page to start from. Relayix is a FastAPI gateway that sits between your app and
 LLM providers (OpenAI, Anthropic): it routes requests, fails over when a provider is
-unhealthy, enforces per-key rate limits, and records token-based cost per request.
+unhealthy, enforces per-key rate limits and token budgets, and records token-based cost
+per request.
 
 ## Where to read more
 
 - **The request path, step by step:** [system_flow.md](system_flow.md): startup
-  validation, admission (auth, rate limit, idempotency), routing & failover, and the
+  validation, admission (auth, rate limits, token budget, idempotency), routing & failover, and the
   usage retry worker.
 - **Per module, in depth:**
   [routing](core/routing.md) ·
   [adapters](core/adapters.md) ·
   [resilience](core/resilience.md) (circuit breaker) ·
-  [ratelimit](core/ratelimit.md) ·
+  [ratelimit](core/ratelimit.md) (incl. token budget) ·
   [accounting](core/accounting.md) (tokens, pricing, usage, retry worker)
 - **How it runs in production:** [deployment.md](deployment.md): AWS ECS on EC2,
   the CloudFormation stacks and the release flow.
@@ -27,12 +28,12 @@ Core        app/core/*        provider-agnostic logic: routing, adapters, resili
                                ratelimit, accounting — no HTTP, no DB
 Repos       app/repositories/*  persistence for api keys, usage, pricing
 Infra       app/infra/*       config, DB session, Redis client, security, idempotency,
-                               usage retry queue
+                               monthly token counter, usage retry queue
 Workers     app/workers/*     long-lived processes next to the API (usage retry)
 ```
 
 `app/main.py` wires it all together at startup (adapter registry, router, pricing
-table, resilient rate limiter) and holds them on `app.state` for the lifetime of the
+table, resilient rate limiters for requests and tokens) and holds them on `app.state` for the lifetime of the
 process. Startup fails if any catalog model has no pricing rate in effect.
 
 ## Processes
@@ -77,6 +78,7 @@ the codebase reads `os.environ` directly.
   fails over safely.
 - Usage is priced from the provider's real reported token counts, never the
   pre-flight estimate, and by the catalog model, never the name the provider reports.
+  The token budget admits on the estimate but is corrected with the real counts.
 - A model with no pricing rate is never called: startup refuses to boot.
 - Once the provider has answered, bookkeeping never fails the response: a failed
   usage insert is queued for the retry worker, and the idempotency key is never

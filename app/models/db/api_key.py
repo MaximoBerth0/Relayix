@@ -32,6 +32,11 @@ class Api_Key(Base):
         nullable=True,
     )  # per-key throttle
 
+    rate_limit_tpm: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )  # per-key tokens per minute
+
     monthly_token_quota: Mapped[int | None] = mapped_column(
         Integer,
         nullable=True,

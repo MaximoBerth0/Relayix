@@ -30,6 +30,7 @@ async def create_api_key(
     api_key, token = await service.create_api_key(
         payload.name,
         rate_limit_rpm=payload.rate_limit_rpm,
+        rate_limit_tpm=payload.rate_limit_tpm,
         monthly_token_quota=payload.monthly_token_quota,
     )
     return ApiKeyCreateResponseSchema.from_domain(api_key, token)

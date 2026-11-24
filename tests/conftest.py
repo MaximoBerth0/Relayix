@@ -136,6 +136,14 @@ async def client(db_session, redis_client):
             reset_timeout_s=settings.ratelimit_breaker_reset_timeout_s,
         ),
     )
+    app.state.token_limiter = ResilientRateLimiter(
+        primary=RedisRateLimiter(redis_client, namespace="ratelimit:tpm"),
+        fallback=InMemoryRateLimiter(),
+        breaker=CircuitBreaker(
+            fail_threshold=settings.ratelimit_breaker_fail_threshold,
+            reset_timeout_s=settings.ratelimit_breaker_reset_timeout_s,
+        ),
+    )
 
     transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

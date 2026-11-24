@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Relayix is a FastAPI gateway that sits in front of LLM providers (OpenAI, Anthropic). Application code calls Relayix instead of a provider directly; Relayix routes the request, fails over to another provider when one is unhealthy, enforces per-key rate limits, and records token-based cost per request.
+Relayix is a FastAPI gateway that sits in front of LLM providers (OpenAI, Anthropic). Application code calls Relayix instead of a provider directly; Relayix routes the request, fails over to another provider when one is unhealthy, enforces per-key rate limits and token budgets (tokens per minute, monthly quota), and records token-based cost per request.
 
 Architecture, the request flow, and per-module docs live under `docs/` (start at `docs/README.md`), read them for detail beyond what's here. Do not edit anything under `docs/` or `README.md` unless explicitly asked.
 
@@ -54,14 +54,14 @@ Repos       app/repositories/*  persistence for api keys, usage, pricing
 Infra       app/infra/*         config, DB session, Redis client, security, idempotency
 ```
 
-`app/core/` holds the provider-agnostic pieces, each documented in `docs/core/`: `adapters` (one interface over OpenAI/Anthropic SDKs), `routing` (tier → ranked candidates), `resilience` (per-provider circuit breaker), `ratelimit` (token bucket, Redis-backed with an in-memory fallback), `accounting` (token counting, pricing, usage recording).
+`app/core/` holds the provider-agnostic pieces, each documented in `docs/core/`: `adapters` (one interface over OpenAI/Anthropic SDKs), `routing` (tier → ranked candidates), `resilience` (per-provider circuit breaker), `ratelimit` (token bucket with a per-request cost, Redis-backed with an in-memory fallback, used for both requests and tokens per minute), `accounting` (token counting, pricing, usage recording).
 
 `app/main.py` builds the process-wide adapter registry, router, pricing table, and resilient rate limiter once at startup and hangs them on `app.state`; `app/api/deps.py` resolves them per request via `Depends`.
 
 Request path — see `docs/system_flow.md` for the full diagrams:
-1. **Admission**: authenticate the API key, rate limit it, and — if an `Idempotency-Key` header was sent reserve or replay before any provider is touched.
+1. **Admission**: authenticate the API key, rate limit it (requests per minute), check its token budget against the estimated prompt (monthly quota, tokens per minute), and, if an `Idempotency-Key` header was sent, reserve or replay before any provider is touched.
 2. **Routing & failover**: resolve the tier to ranked `(provider, model)` candidates, skip unconfigured or circuit-open ones, call the first that's left under a hard timeout.
-3. Success is priced from the provider's real reported token counts (never the pre-flight estimate), by the catalog model, and recorded as a `UsageRecord`. If that insert fails, the record goes to a Redis list and `app/workers/usage_retry.py` persists it later; the response is never failed for it.
+3. Success settles the token budget with the real token counts, and is priced from the provider's real reported token counts (never the pre-flight estimate), by the catalog model, and recorded as a `UsageRecord`. If that insert fails, the record goes to a Redis list and `app/workers/usage_retry.py` persists it later; the response is never failed for it.
 
 Startup refuses to boot if a catalog model has no pricing rate (`validate_pricing`), so adding a model to the catalog means adding its rate too (migration `0003` seeds the default catalog).
 
@@ -70,7 +70,8 @@ Startup refuses to boot if a catalog model has no pricing rate (`validate_pricin
 - A provider is only registered when its API key is configured.
 - An unavailable provider (never reached, or circuit open) always fails over safely. A *timeout* is ambiguous the request may have already executed and billed so failing over on timeout is gated by `failover_policy`, defaulting to `at_most_once` (no double-spend).
 - A completed idempotency key never re-runs the request; the same key with a different request body is a conflict (422), not a retry.
-- Money (usage cost) is computed from the provider's actual returned token counts, not the estimate used for pre-flight checks.
+- Money (usage cost) is computed from the provider's actual returned token counts, not the estimate used for pre-flight checks. The token budget admits on that estimate, then is corrected with the real counts.
+- The monthly token counter in Redis is a cache: Postgres (`usage_record`) is the source of truth, a missing counter is seeded from it, never assumed to be zero.
 - Once the provider has answered, bookkeeping (pricing, the usage insert, storing the idempotent response) never fails the caller's request and never releases its idempotency key.
 - Each provider has its own circuit breaker; one sick provider never blocks another.
 

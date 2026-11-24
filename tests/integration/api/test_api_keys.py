@@ -54,6 +54,27 @@ async def test_create_rejects_non_positive_rate_limit(client):
     assert response.status_code == 422
 
 
+async def test_create_accepts_a_tokens_per_minute_limit(client):
+    response = await client.post(
+        "/v1/api-keys",
+        headers=ADMIN_AUTH_HEADERS,
+        json={"name": "my-key", "rate_limit_tpm": 50_000},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["rate_limit_tpm"] == 50_000
+
+
+async def test_create_rejects_non_positive_tokens_per_minute(client):
+    response = await client.post(
+        "/v1/api-keys",
+        headers=ADMIN_AUTH_HEADERS,
+        json={"name": "my-key", "rate_limit_tpm": 0},
+    )
+
+    assert response.status_code == 422
+
+
 async def test_list_returns_every_key_most_recent_first(client):
     await client.post("/v1/api-keys", headers=ADMIN_AUTH_HEADERS, json={"name": "first"})
     await client.post("/v1/api-keys", headers=ADMIN_AUTH_HEADERS, json={"name": "second"})

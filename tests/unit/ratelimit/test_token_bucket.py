@@ -39,60 +39,60 @@ async def test_a_new_key_starts_with_a_full_bucket(clock):
     """First call for a brand-new caller must succeed, not start at zero."""
     limiter = InMemoryRateLimiter()
 
-    await limiter.check(KEY, rpm=60)  # raises on failure
+    await limiter.check(KEY, per_minute=60)  # raises on failure
 
 
 async def test_capacity_calls_succeed_before_the_bucket_is_exhausted(clock):
     limiter = InMemoryRateLimiter()
 
     for _ in range(5):
-        await limiter.check(KEY, rpm=5)
+        await limiter.check(KEY, per_minute=5)
 
 
 async def test_the_call_past_capacity_is_rejected(clock):
     limiter = InMemoryRateLimiter()
 
     for _ in range(5):
-        await limiter.check(KEY, rpm=5)
+        await limiter.check(KEY, per_minute=5)
 
     with pytest.raises(RateLimitExceeded):
-        await limiter.check(KEY, rpm=5)
+        await limiter.check(KEY, per_minute=5)
 
 
 async def test_retry_after_reflects_the_time_to_the_next_token(clock):
-    """rpm=1 gives a bucket of capacity 1 that refills one token every 60s, so
+    """per_minute=1 gives a bucket of capacity 1 that refills one token every 60s, so
     right after exhausting it the caller must wait ~60s for the next one.
     """
     limiter = InMemoryRateLimiter()
-    await limiter.check(KEY, rpm=1)  # spends the only token
+    await limiter.check(KEY, per_minute=1)  # spends the only token
 
     with pytest.raises(RateLimitExceeded) as excinfo:
-        await limiter.check(KEY, rpm=1)
+        await limiter.check(KEY, per_minute=1)
 
     assert excinfo.value.retry_after_s == pytest.approx(60.0, abs=0.01)
 
 
 async def test_elapsed_time_refills_the_bucket(clock):
     limiter = InMemoryRateLimiter()
-    await limiter.check(KEY, rpm=60)  # 59 tokens left
+    await limiter.check(KEY, per_minute=60)  # 59 tokens left
 
     clock.advance(30)  # +30 tokens at 1/s
 
     for _ in range(31):
-        await limiter.check(KEY, rpm=60)
+        await limiter.check(KEY, per_minute=60)
 
 
 async def test_idle_time_cannot_bank_more_than_capacity(clock):
     """Refill caps at capacity, an idle caller doesn't accrue unlimited burst."""
     limiter = InMemoryRateLimiter()
-    await limiter.check(KEY, rpm=5)  # 4 tokens left
+    await limiter.check(KEY, per_minute=5)  # 4 tokens left
 
     clock.advance(3600)  # would be +300 tokens uncapped
 
     for _ in range(5):
-        await limiter.check(KEY, rpm=5)
+        await limiter.check(KEY, per_minute=5)
     with pytest.raises(RateLimitExceeded):
-        await limiter.check(KEY, rpm=5)
+        await limiter.check(KEY, per_minute=5)
 
 
 async def test_different_keys_have_independent_buckets(clock):
@@ -100,9 +100,9 @@ async def test_different_keys_have_independent_buckets(clock):
     other_key = uuid4()
 
     for _ in range(5):
-        await limiter.check(KEY, rpm=5)
+        await limiter.check(KEY, per_minute=5)
 
-    await limiter.check(other_key, rpm=5)  # a fresh bucket, unaffected by KEY
+    await limiter.check(other_key, per_minute=5)  # a fresh bucket, unaffected by KEY
 
 
 async def test_concurrent_checks_never_oversell_the_bucket(clock):
@@ -113,7 +113,7 @@ async def test_concurrent_checks_never_oversell_the_bucket(clock):
     capacity = 20
 
     results = await asyncio.gather(
-        *(limiter.check(KEY, rpm=capacity) for _ in range(capacity + 10)),
+        *(limiter.check(KEY, per_minute=capacity) for _ in range(capacity + 10)),
         return_exceptions=True,
     )
 
@@ -121,3 +121,45 @@ async def test_concurrent_checks_never_oversell_the_bucket(clock):
     rejected = [r for r in results if isinstance(r, RateLimitExceeded)]
     assert len(admitted) == capacity
     assert len(rejected) == 10
+
+
+async def test_a_check_spends_its_cost(clock):
+    """Tokens per minute: one request spends its estimated prompt, not one unit."""
+    limiter = InMemoryRateLimiter()
+    await limiter.check(KEY, per_minute=100, cost=80)  # 20 left
+
+    with pytest.raises(RateLimitExceeded) as excinfo:
+        await limiter.check(KEY, per_minute=100, cost=30)
+
+    # 10 missing at 100/60 per second
+    assert excinfo.value.retry_after_s == pytest.approx(6.0, abs=0.01)
+
+
+async def test_a_cost_bigger_than_the_bucket_passes_only_when_it_is_full(clock):
+    """Otherwise a prompt larger than the whole limit could never get through."""
+    limiter = InMemoryRateLimiter()
+    await limiter.check(KEY, per_minute=100, cost=250)  # bucket was full, now -150
+
+    with pytest.raises(RateLimitExceeded):
+        await limiter.check(KEY, per_minute=100, cost=1)
+
+
+async def test_charge_corrects_an_estimate_both_ways(clock):
+    limiter = InMemoryRateLimiter()
+    await limiter.check(KEY, per_minute=100, cost=50)  # 50 left
+
+    await limiter.charge(KEY, per_minute=100, cost=40)  # real cost was 90, 10 left
+    with pytest.raises(RateLimitExceeded):
+        await limiter.check(KEY, per_minute=100, cost=20)
+
+    await limiter.charge(KEY, per_minute=100, cost=-30)  # a refund, 40 left
+    await limiter.check(KEY, per_minute=100, cost=40)
+
+
+async def test_a_refund_never_overfills_the_bucket(clock):
+    limiter = InMemoryRateLimiter()
+    await limiter.charge(KEY, per_minute=100, cost=-500)
+
+    await limiter.check(KEY, per_minute=100, cost=100)
+    with pytest.raises(RateLimitExceeded):
+        await limiter.check(KEY, per_minute=100, cost=1)

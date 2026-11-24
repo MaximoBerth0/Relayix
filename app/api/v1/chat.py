@@ -11,12 +11,14 @@ from app.api.deps import (
     get_current_api_key_id,
     get_gateway_service,
     get_idempotency_service,
+    get_token_budget_service,
 )
 from app.api.v1.schemas.chat import ChatRequestSchema, ChatResponseSchema
 from app.infra.global_exceptions import AppError
 from app.models.domain.chat import ChatStreamDelta, ChatStreamEvent
 from app.services.gateway_service import GatewayService
 from app.services.idempotency_service import IdempotencyService
+from app.services.token_budget_service import TokenBudgetService
 
 router = APIRouter(
     prefix="/v1/chat",
@@ -37,9 +39,11 @@ async def create_completion(
     service: GatewayService = Depends(get_gateway_service),
     api_key_id: UUID = Depends(get_current_api_key_id),
     idempotency: IdempotencyService = Depends(get_idempotency_service),
+    budget: TokenBudgetService = Depends(get_token_budget_service),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     request = payload.to_domain()
+    await budget.admit(request)
 
     if payload.stream:
         if idempotency_key is None:

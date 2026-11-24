@@ -19,6 +19,7 @@ from app.core.routing.strategies import Candidate
 from app.infra.global_exceptions import ProviderNotAvailable
 from app.models.domain.chat import ChatRequest, ChatResponse, ChatStreamEvent
 from app.models.domain.enums import FailoverPolicy
+from app.services.token_budget_service import TokenBudgetService
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ class GatewayService:
         recorder: UsageRecorder,
         detached_recorder: UsageRecorder,
         counters: CounterRegistry,
+        budget: TokenBudgetService | None = None,
     ) -> None:
         self._registry = registry
         self._router = router
@@ -38,6 +40,7 @@ class GatewayService:
         # its own session: an abandoned stream can't rely on the request's transaction
         self._detached_recorder = detached_recorder
         self._counters = counters
+        self._budget = budget
 
     async def complete(self, request: ChatRequest, api_key_id: UUID) -> ChatResponse:
 
@@ -335,6 +338,8 @@ class GatewayService:
         """Record usage without ever failing the caller: the provider already billed,
         so a pricing or DB error here is ours to reconcile, not the caller's.
         """
+        if self._budget is not None:
+            await self._budget.settle(response)
         try:
             await (recorder or self._recorder).record(api_key_id, response, model)
         except Exception:

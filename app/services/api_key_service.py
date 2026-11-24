@@ -32,6 +32,7 @@ class ApiKeyService:
         name: str,
         *,
         rate_limit_rpm: int | None = None,
+        rate_limit_tpm: int | None = None,
         monthly_token_quota: int | None = None,
     ) -> tuple[ApiKey, str]:
         """create a new api key. The raw token is returned once, alongside the
@@ -41,6 +42,7 @@ class ApiKeyService:
             key_hash=hash_api_key(token),
             name=name,
             rate_limit_rpm=rate_limit_rpm,
+            rate_limit_tpm=rate_limit_tpm,
             monthly_token_quota=monthly_token_quota,
         )
         await self._repository.create(api_key)

@@ -1,6 +1,6 @@
 # accounting
 
-Answers "how many tokens did this cost, and what is that in money". Token counting runs before a request (for pre-flight checks and estimates); pricing and recording run after, once the provider reports real usage.
+Answers "how many tokens did this cost, and what is that in money". Token counting runs before a request (the token budget's estimate) and fills in counts a cut stream never received; pricing and recording run after, once the provider reports real usage.
 
 ## Files
 
@@ -18,9 +18,10 @@ Answers "how many tokens did this cost, and what is that in money". Token counti
 ```python
 class TokenCounter(ABC):
     def count(self, request: ChatRequest) -> int: ...
+    def count_completion(self, model: str, content: str) -> int: ...
 ```
 
-Returns the prompt tokens a request will consume. Two implementations:
+`count` returns the prompt tokens a request will consume, `count_completion` the output tokens a piece of content cost. They are used in two places, never for pricing a normal response: the [token budget](ratelimit.md#token-budget) estimates the prompt at admission, and the gateway estimates the counts of a stream that ended before the provider reported usage (the record is flagged `tokens_estimated`). Two implementations:
 
 - **`OpenAICounter`**: uses `tiktoken`, picking the model's encoding and falling back to `o200k_base` for unknown models. Exact.
 - **`AnthropicCounter`**: Anthropic ships no local tokenizer, so this estimates at `3.5` chars per token. An estimate, not a billing source of truth.
