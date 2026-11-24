@@ -39,16 +39,11 @@ import app.models.db.usage_record
 from app.core.accounting.pricing import build_pricing_table
 from app.core.accounting.registry import build_registry as build_counter_registry
 from app.core.adapters.registry import build_registry
-from app.core.ratelimit.resilient import ResilientRateLimiter
-from app.core.ratelimit.token_bucket import InMemoryRateLimiter
-from app.core.resilience.circuit_breaker import CircuitBreaker
 from app.core.routing.router import build_router
-from app.infra.config import settings
 from app.infra.database.base import Base
 from app.infra.database.session import get_session
 from app.infra.ratelimit.redis_client import build_redis_client
-from app.infra.ratelimit.redis_limiter import RedisRateLimiter
-from app.main import app
+from app.main import app, build_rate_limiter
 from app.models.db.api_key import Api_Key
 from app.models.db.usage_record import Usage_Record
 from app.models.domain.enums import ProviderEnum
@@ -128,22 +123,10 @@ async def client(db_session, redis_client):
     app.state.counters = build_counter_registry()
     app.state.pricing = build_pricing_table(await load_pricing_rates(db_session))
     app.state.redis = redis_client
-    app.state.rate_limiter = ResilientRateLimiter(
-        primary=RedisRateLimiter(redis_client),
-        fallback=InMemoryRateLimiter(),
-        breaker=CircuitBreaker(
-            fail_threshold=settings.ratelimit_breaker_fail_threshold,
-            reset_timeout_s=settings.ratelimit_breaker_reset_timeout_s,
-        ),
-    )
-    app.state.token_limiter = ResilientRateLimiter(
-        primary=RedisRateLimiter(redis_client, namespace="ratelimit:tpm"),
-        fallback=InMemoryRateLimiter(),
-        breaker=CircuitBreaker(
-            fail_threshold=settings.ratelimit_breaker_fail_threshold,
-            reset_timeout_s=settings.ratelimit_breaker_reset_timeout_s,
-        ),
-    )
+    app.state.rate_limiter = build_rate_limiter(redis_client, "ratelimit")
+    app.state.token_limiter = build_rate_limiter(redis_client, "ratelimit:tpm")
+    app.state.usage_limiter = build_rate_limiter(redis_client, "ratelimit:usage")
+    app.state.admin_limiter = build_rate_limiter(redis_client, "ratelimit:admin")
 
     transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

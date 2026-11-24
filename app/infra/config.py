@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     default_rate_limit_rpm: int = 60
     # same for tokens per minute (prompt + completion), keys without rate_limit_tpm
     default_rate_limit_tpm: int = 100_000
+    # fixed, per key: the usage endpoints run aggregates over usage_record
+    usage_rate_limit_rpm: int = 30
+    # one bucket shared by every caller holding the admin token
+    admin_rate_limit_rpm: int = 60
 
     # --- rate limiting (Redis primary, in-memory fallback) ---
     # where the shared token buckets live. Redis is the source of truth so the

@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from redis.asyncio import Redis
 
 from app.api.v1 import api_keys, chat, health, usage
 from app.core.accounting.pricing import build_pricing_table
@@ -27,6 +28,18 @@ from app.repositories.pricing_repo import load_pricing_rates
 logger = logging.getLogger(__name__)
 
 
+def build_rate_limiter(redis_client: Redis, namespace: str) -> ResilientRateLimiter:
+    """a Redis bucket under `namespace`, with its own in-memory fallback and breaker"""
+    return ResilientRateLimiter(
+        primary=RedisRateLimiter(redis_client, namespace=namespace),
+        fallback=InMemoryRateLimiter(),
+        breaker=CircuitBreaker(
+            fail_threshold=settings.ratelimit_breaker_fail_threshold,
+            reset_timeout_s=settings.ratelimit_breaker_reset_timeout_s,
+        ),
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Build shared, long-lived resources once per process"""
@@ -45,22 +58,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # the fallback, and a dedicated circuit breaker decides which one is in charge
     redis_client = build_redis_client()
     app.state.redis = redis_client
-    app.state.rate_limiter = ResilientRateLimiter(
-        primary=RedisRateLimiter(redis_client),
-        fallback=InMemoryRateLimiter(),
-        breaker=CircuitBreaker(
-            fail_threshold=settings.ratelimit_breaker_fail_threshold,
-            reset_timeout_s=settings.ratelimit_breaker_reset_timeout_s,
-        ),
-    )
-    app.state.token_limiter = ResilientRateLimiter(
-        primary=RedisRateLimiter(redis_client, namespace="ratelimit:tpm"),
-        fallback=InMemoryRateLimiter(),
-        breaker=CircuitBreaker(
-            fail_threshold=settings.ratelimit_breaker_fail_threshold,
-            reset_timeout_s=settings.ratelimit_breaker_reset_timeout_s,
-        ),
-    )
+    app.state.rate_limiter = build_rate_limiter(redis_client, "ratelimit")
+    app.state.token_limiter = build_rate_limiter(redis_client, "ratelimit:tpm")
+    app.state.usage_limiter = build_rate_limiter(redis_client, "ratelimit:usage")
+    app.state.admin_limiter = build_rate_limiter(redis_client, "ratelimit:admin")
 
     try:
         yield

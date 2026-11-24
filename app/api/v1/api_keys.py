@@ -2,7 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
 
-from app.api.deps import get_api_key_service, get_current_admin
+from app.api.deps import enforce_admin_rate_limit, get_api_key_service
 from app.api.v1.schemas.api_key import (
     ApiKeyCreateRequestSchema,
     ApiKeyCreateResponseSchema,
@@ -13,7 +13,7 @@ from app.services.api_key_service import ApiKeyService
 router = APIRouter(
     prefix="/v1/api-keys",
     tags=["api-keys"],
-    dependencies=[Depends(get_current_admin)],
+    dependencies=[Depends(enforce_admin_rate_limit)],
 )
 
 

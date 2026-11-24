@@ -33,6 +33,11 @@ Parameters:
     Type: String
     Default: ""
     Description: ACM certificate for the API domain, same region. Empty serves plain HTTP on 80
+  WafRequestsPerIpPerMinute:
+    Type: Number
+    Default: 1000
+    MinValue: 10
+    Description: per-IP ceiling at the ALB, above every key's rpm since several keys can share a NAT IP
 
   # compute
   InstanceType:
@@ -280,6 +285,47 @@ Resources:
       Actions:
         - Type: fixed-response
           FixedResponseConfig: { StatusCode: "404", ContentType: text/plain }
+
+  # the app's limits are per key and only run after the key lookup, so without
+  # this a flood of invalid keys is a Postgres query and a 401 each
+  WebAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub ${Project}-alb
+      Scope: REGIONAL
+      DefaultAction: { Allow: {} }
+      CustomResponseBodies:
+        rate-limited:
+          ContentType: APPLICATION_JSON
+          Content: '{"error_code":"RATE_LIMITED","message":"Too many requests from this IP"}'
+      Rules:
+        - Name: rate-per-ip
+          Priority: 0
+          Statement:
+            RateBasedStatement:
+              AggregateKeyType: IP
+              EvaluationWindowSec: 60
+              Limit: !Ref WafRequestsPerIpPerMinute
+          Action:
+            Block:
+              CustomResponse:
+                ResponseCode: 429
+                CustomResponseBodyKey: rate-limited
+                ResponseHeaders: [{ Name: Retry-After, Value: "60" }]
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub ${Project}-rate-per-ip
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub ${Project}-alb
+
+  WebAclAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Ref LoadBalancer
+      WebACLArn: !GetAtt WebAcl.Arn
 
   # data stores
 

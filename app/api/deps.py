@@ -183,3 +183,23 @@ async def enforce_rate_limit(
     """throttle the caller before the request reaches a provider"""
     rpm = api_key.rate_limit_rpm or settings.default_rate_limit_rpm
     await limiter.check(api_key.id, rpm)
+
+
+async def enforce_usage_rate_limit(
+    request: Request,
+    api_key: Api_Key = Depends(get_current_api_key),
+) -> None:
+    """throttle the usage aggregates, in a bucket apart from the completions one"""
+    await request.app.state.usage_limiter.check(api_key.id, settings.usage_rate_limit_rpm)
+
+
+# the admin token has no api_key row, so every admin caller shares this bucket
+ADMIN_BUCKET_KEY = UUID(int=0)
+
+
+async def enforce_admin_rate_limit(
+    request: Request,
+    _: None = Depends(get_current_admin),
+) -> None:
+    """authenticate the admin, then throttle the api-key management endpoints"""
+    await request.app.state.admin_limiter.check(ADMIN_BUCKET_KEY, settings.admin_rate_limit_rpm)

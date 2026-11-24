@@ -3,7 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
 
-from app.api.deps import get_current_api_key_id, get_usage_service
+from app.api.deps import enforce_usage_rate_limit, get_current_api_key_id, get_usage_service
 from app.api.v1.schemas.usage import (
     UsageByModelSchema,
     UsageRecordSchema,
@@ -14,6 +14,7 @@ from app.services.usage_service import UsageService
 router = APIRouter(
     prefix="/v1/usage",
     tags=["usage"],
+    dependencies=[Depends(enforce_usage_rate_limit)],
 )
 
 @router.get(
